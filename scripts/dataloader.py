@@ -1,0 +1,481 @@
+import os
+from PIL import Image
+from torch.utils.data import Dataset, DataLoader
+from datetime import datetime
+import pandas as pd
+import json, os
+import torch
+from typing import Dict
+import random
+from torchvision import transforms
+to_tensor = transforms.ToTensor()
+
+class VLM_Dataset(Dataset):
+    def __init__(self, args, 
+                 data_list, 
+                 metadata_image_path, 
+                 use_cxr_image=False, 
+                 use_rad_report=False, 
+                 use_discharge_note=False,
+                 shuffle=False,
+                 summarize=False):
+        self.args = args
+        self.data_list = data_list
+        self.use_cxr_image = use_cxr_image
+        self.use_rad_report = use_rad_report
+        self.use_discharge_note = use_discharge_note
+        self.summarize = summarize
+        self.hash2meta = load_hash2meta_dict(args.metadata_path, metadata_image_path)
+        self.Decision_tree = CXRDecisionTree()
+
+        if shuffle:
+            random.seed(50)
+            random.shuffle(self.data_list)        
+        
+    def __len__(self):
+        return len(self.data_list)
+
+    def __getitem__(self, idx):
+        item = self.data_list[idx]
+        
+        if not self.args.summarize:
+            sample = {
+                    "id": item['id'],
+                    "label": item['label'],
+                    "summary_type": item['summary_type']
+                    }
+        else:
+            sample = {
+                    "id": item['id'],
+                    "label": item['label'],
+                    "original_note": item['text'][0] if isinstance(item['text'], list) else item['text'],
+                    "summary_type": item['summary_type']
+                    }
+
+        if self.use_discharge_note:
+            sample["text"] = item['text'][0] if isinstance(item['text'], list) else item['text']
+        else:
+            sample["text"] = None
+        all_img_data_paths = self.hash2meta[item['id']]['metadata_filtered']
+        selected_img_data_path = self.Decision_tree.select_best_cxr(all_img_data_paths)
+
+        if self.use_cxr_image:
+            valid_image_path = [os.path.join(
+                self.args.base_img_dir,
+                selected_img_data_path[1]
+            )]
+            sample["image"] = self._load_images(valid_image_path)
+        else:
+            sample["image"] = None
+
+        if self.use_rad_report:            
+            valid_report_path = [os.path.join(
+                self.args.base_rr_dir,
+                '/'.join(selected_img_data_path[1].split("/")[:3]) + ".txt"
+            )]
+            sample["rad_report"] = self._load_reports(valid_report_path)
+        else:
+            sample["rad_report"] = None
+
+        if self.args.use_pi:
+            sample["personal_information"] = {"race": self.hash2meta[item['id']]['race'],
+                                            "age": self.hash2meta[item['id']]['age']}
+        else:
+            sample["personal_information"] = {}
+
+        if self.summarize:
+            system_prompt, user_prompt = self._get_prompt_summarize(self.args.summary_type, sample["original_note"])
+        else:
+            system_prompt, user_prompt = self._get_prompt(dn=sample["text"], images=sample["image"], rr=sample["rad_report"], pi=sample["personal_information"])
+
+        sample["chat_template"] = self._load_chat_template(system_prompt, user_prompt, sample["image"])
+
+        return sample
+
+    def _load_images(self, image_paths: list) -> list:
+        images = []
+        cache_dir = os.path.join("cache_images")
+        os.makedirs(cache_dir, exist_ok=True)
+
+        for image_path in image_paths:
+            # resized path 결정
+            if "512_resized" in image_path.lower():
+                img_path = image_path
+            else:
+                base, ext = image_path.rsplit('.', 1)
+                img_path = f"{base}_512_resized.{ext}"
+
+            cache_name = os.path.basename(img_path) + ".pt"
+            cache_path = os.path.join(cache_dir, cache_name)
+
+            if os.path.exists(cache_path):
+                tensor_img = torch.load(cache_path, map_location="cpu", weights_only=False)
+            else:
+                image = Image.open(img_path).convert("RGB")
+                tensor_img = to_tensor(image)
+                torch.save(tensor_img, cache_path)
+
+            images.append(tensor_img)
+
+        return images
+
+    def _load_reports(self, report_paths: list) -> list:
+        reports = []
+        for report_path in report_paths:
+            with open(report_path, "r", encoding='utf-8') as f:
+                report = f.read()
+            reports.append(report.replace('\n', ' ').strip())
+        return reports
+        
+    def _load_chat_template(self, system_prompt, user_prompt, images=None):
+        if images:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": [
+                    *[{"type": "image"} for _ in images],
+                    {"type": "text", "text": user_prompt}
+                ]}
+            ]
+        else:
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": [
+                    {"type": "text", "text": user_prompt}
+                ]}
+            ]
+        return messages
+    
+    def _get_prompt_summarize(self, prompt_type, dn):
+
+        system_prompt = (
+                "You are a highly trained medical assistant specializing in clinical documentation and summarization. "
+                "Your task is to produce concise, accurate summaries of discharge notes, relying only on the information explicitly provided in the original document. "
+                "Omit any personally identifiable details (e.g., names, ages, races, or ID numbers), and focus strictly on clinically relevant information."
+            )
+
+        if prompt_type == "plain":
+            user_prompt = (
+                f"Here is the clinical discharge document:\n{dn}\n\n"
+                "Please generate a summary of overall ICU discharge note that includes important clinical information. "
+                "Write the summary as concise, clear, and well-organized bullet points. "
+            )
+            
+        elif prompt_type == "plain_remove_cxr":
+            user_prompt = (
+                f"Here is the clinical discharge document:\n{dn}\n\n"
+                "Please generate a summary of overall ICU discharge note that includes important clinical information while excluding all findings related to chest imaging (including x-ray, CT, or other imaging modalities). "
+                "Write the summary as concise, clear, and well-organized bullet points."
+                
+                # f"Here is the clinical discharge document:\n{dn}\n\n"
+                # "Please generate a summary of overall ICU discharge note that includes important clinical information. "
+                # "However make sure to include a separate dedicated section for CXR and Chest CT findings using \'### CXR and Chest CT\' header dedicated to ONLY chest imaging findings, "
+                # "using bullet points to describe report details and clinical implications."
+                # "Write the summary as concise, clear, and well-organized bullet points. "
+            )
+
+        elif prompt_type == "risk_factor":
+            user_prompt = (
+                f"Here is the clinical discharge document:\n{dn}\n\n"
+                "Please generate a summary of potential risk factors from the discharge note, including relevant details with a balanced perspective by summarizing both risk factors and signs of stability or a positive prognosis, outlining:"
+                "- Clinical Stability: The patient's current physical stability and any lingering critical conditions. "
+                "- Past History: The patient’s medical history and any pre-existing conditions that could influence recovery. "
+                "- New Diagnosis: Any new diagnoses made during the patient's stay. "
+                "- Follow-Up: The discharge instructions and any recommended outpatient care. "
+                "- Adherence: Any notes or concerns regarding the patient’s ability to follow treatment plans. "
+                "- Substance Use: Any documented use of drugs, alcohol, or smoking. "
+                "- Other Factors: Any additional risks or notable circumstances exAplicitly mentioned in the discharge note. "
+                "Please present your summary in concise, clear, and well-organized bullet points."
+            )
+
+        elif prompt_type == "risk_factor_remove_cxr":
+            user_prompt = (
+                f"Here is the clinical discharge document:\n{dn}\n\n"
+                "Please generate a summary of potential risk factors from the discharge note, including relevant details with a balanced perspective by summarizing both risk factors and signs of stability or a positive prognosis, while excluding all findings related to chest imaging (including x-ray, CT, or other imaging modalities). outlining:"
+                "- Clinical Stability: The patient's current physical stability and any lingering critical conditions. "
+                "- Past History: The patient’s medical history and any pre-existing conditions that could influence recovery. "
+                "- New Diagnosis: Any new diagnoses made during the patient's stay. "
+                "- Follow-Up: The discharge instructions and any recommended outpatient care. "
+                "- Adherence: Any notes or concerns regarding the patient’s ability to follow treatment plans. "
+                "- Substance Use: Any documented use of drugs, alcohol, or smoking. "
+                "- Other Factors: Any additional risks or notable circumstances exAplicitly mentioned in the discharge note. "
+                "Please present your summary in concise, clear, and well-organized bullet points."
+            )
+
+        elif prompt_type == "timeline":
+            user_prompt = (
+                f"Here is the clinical discharge document:\n{dn}\n\n"
+                "Please generate a timeline summary of the discharge note, outlining: "
+                "- Chronological Progression: The chronological progression of the patient's ICU stay from admission to discharge. "
+                "- Significant Clinical Changes: Significant changes in the patient's clinical condition over time. "
+                "- Timeline of Interventions: The timeline of interventions specific to the ICU setting. "
+                "- Notable Complications or Setbacks: Any notable complications or setbacks encountered during the ICU stay. "
+                "- Changes in Care Plans: Modifications to the patient's care plan or treatment approach. "
+                "Please present your summary in concise, clear, and well-organized bullet points."
+            )
+
+        elif prompt_type == "timeline_remove_cxr":
+            user_prompt = (
+                f"Here is the clinical discharge document:\n{dn}\n\n"
+                "Please generate a timeline summary of the discharge note, while excluding all findings related to chest imaging (including x-ray, CT, or other imaging modalities). outlining: "
+                "- Chronological Progression: The chronological progression of the patient's ICU stay from admission to discharge. "
+                "- Significant Clinical Changes: Significant changes in the patient's clinical condition over time. "
+                "- Timeline of Interventions: The timeline of interventions specific to the ICU setting. "
+                "- Notable Complications or Setbacks: Any notable complications or setbacks encountered during the ICU stay. "
+                "- Changes in Care Plans: Modifications to the patient's care plan or treatment approach. "
+                "Please present your summary in concise, clear, and well-organized bullet points."
+            )
+        else:
+            raise KeyError("Check prompt type for summarization!")
+            
+        return system_prompt, user_prompt
+
+    def _get_prompt(self, dn=None, images=None, rr=None, pi=None):
+        # discharge note only
+
+        if len(pi) > 1:
+            personal_information = f"AGE : {pi['age']}, RACE : {pi['race']}"
+        else:
+            personal_information = ""
+
+        if dn and not images and not rr:
+            system_prompt = (
+                "Below is a clinical discharge document. "
+                "Based on the given clinical context, assess how likely the patient's out-of-hospital mortality is within 30 days."
+            )
+            user_prompt = (
+                f"Here is the clinical document:\n{personal_information} {dn}\n\n"
+                # f"Here is the clinical discharge document:\n{dn}\n\n"
+                "Based on the clinical information provided, how likely is the patient's out-of-hospital mortality within 30 days? "
+                "Please do not explain the reason and respond with one word only: 0:alive, 1:death.\n\nAssistant:"
+            )
+        # CXR image only
+        elif images and not dn and not rr:
+            system_prompt = (
+                "A single, most recent chest X-ray (CXR) image from the patient is provided. "
+                "Based on the provided CXR image, assess how likely the patient's out-of-hospital mortality is within 30 days."
+            )
+            user_prompt = (
+                "Based on the provided single CXR image, how likely is the patient's out-of-hospital mortality within 30 days? "
+                "Please do not explain the reason and respond with one word only: 0:alive, 1:death.\n\nAssistant:"
+            )
+        # Radiology note only
+        elif rr and not dn and not images:
+            system_prompt = (
+                "A most recent radiology report from the patient is provided. "
+                "Based on the provided radiology report, assess how likely the patient's out-of-hospital mortality is within 30 days."
+            )
+            user_prompt = (
+                f"Here is the radiology report:\n{rr}\n\n"
+                "Based on the radiology report provided, how likely is the patient's out-of-hospital mortality within 30 days? "
+                "Please do not explain the reason and respond with one word only: 0:alive, 1:death.\n\nAssistant:"
+            )
+        # Discharge note + Radiology note
+        elif dn and rr and not images:
+            system_prompt = (
+                "A clinical document and a most recent radiology report are provided. "
+                "Based on the clinical context and the radiology report, assess how likely the patient's out-of-hospital mortality is within 30 days."
+            )
+            user_prompt = (
+                f"Here is the clinical document:\n{personal_information} {dn}\n\n"
+                # f"Here is the clinical discharge document:\n{dn}\n\n"
+                f"Here is the radiology report:\n{rr}\n\n"
+                "Based on the provided clinical information and radiology report, how likely is the patient's out-of-hospital mortality within 30 days? "
+                "Please do not explain the reason and respond with one word only: 0:alive, 1:death.\n\nAssistant:"
+            )
+        # Discharge note + CXR image
+        elif dn and images and not rr:
+            system_prompt = (
+                "A clinical document and a single, most recent chest X-ray (CXR) image from the patient are provided. "
+                "Based on the clinical context and the provided CXR image, assess how likely the patient's out-of-hospital mortality is within 30 days."
+            )
+            user_prompt = (
+                # f"Here is the clinical document:\n{personal_information} {dn}\n\n"
+                f"Here is the clinical discharge document:\n{dn}\n\n"
+                "Based on the provided clinical information and single CXR image, how likely is the patient's out-of-hospital mortality within 30 days? "
+                "Please do not explain the reason and respond with one word only: 0:alive, 1:death.\n\nAssistant:"
+            )
+        # CXR image + Radiology note
+        elif images and rr and not dn:
+            system_prompt = (
+                "A single, most recent chest X-ray (CXR) image from the patient and a radiology report are provided. "
+                "Based on the radiology report and the provided CXR image, assess how likely the patient's out-of-hospital mortality is within 30 days."
+            )
+            user_prompt = (
+                f"Here is the radiology report:\n{rr}\n\n"
+                "Based on the provided CXR image and radiology report, how likely is the patient's out-of-hospital mortality within 30 days? "
+                "Please do not explain the reason and respond with one word only: 0:alive, 1:death.\n\nAssistant:"
+            )
+        else:
+            raise ValueError("Please provide one of the following combinations:\n discharge note only,\n CXR image only,\n radiology note only,\n discharge note + radiology note,\n discharge note + CXR image,\n CXR image + radiology note.")
+            
+        return system_prompt, user_prompt
+
+
+def custom_data_collator(processor, use_cxr_image=False, summary_type="plain"):
+    def collate_fn(examples: list) -> Dict[str, torch.Tensor]:
+        if summary_type == "merged":
+            filtered_examples = examples
+        else:
+            filtered_examples = [ex for ex in examples if ex["summary_type"] == summary_type]
+        texts = []
+        images = []
+        ids = []
+        labels = []
+        
+        for example in filtered_examples:
+            texts.append(processor.apply_chat_template(example["chat_template"], tokenize=False))
+            ids.append(example["id"])
+            labels.append(example["label"])
+            if use_cxr_image:
+                if example.get("image") is not None:
+                    if isinstance(example["image"], list):
+                        images.append(example["image"][0])
+                    else:
+                        images.append(example["image"])
+                else:
+                    images.append(None)
+        
+        if use_cxr_image:
+            batch = processor(
+                text=texts,
+                images=images,
+                return_tensors="pt",
+                padding=True,
+                truncation=False
+            )
+        else:
+            batch = processor(
+                text=texts,
+                return_tensors="pt",
+                padding=True,
+                truncation=False
+            )
+        
+        batch["ids"] = ids
+        batch["labels"] = torch.tensor(labels, dtype=torch.long)
+        return batch
+
+    return collate_fn
+
+def load_hash2meta_dict(mapper_path, image_path):
+    # Load note2hash mapping
+    with open(mapper_path, 'r', encoding='utf-8') as f_mapper:
+        mapper = json.load(f_mapper)
+    note2hash = {note_info['note_id']: hash_key for hash_key, note_info in mapper.items()}
+
+    # Load image path parser
+    with open(image_path, 'r', encoding='utf-8') as f_image:
+        img_path_parser = json.load(f_image)
+
+    hash2meta = {}
+    for metadata in img_path_parser['data']:
+        note_id = metadata['id']
+        hash_key = note2hash.get(note_id, None)
+
+        # Parse in_time and out_time
+        try:
+            in_time = pd.to_datetime(metadata['debug_features']['INTIME'])
+            out_time = pd.to_datetime(metadata['debug_features']['OUTTIME'])
+            assert in_time < out_time, f"INTIME {in_time} must be earlier than OUTTIME {out_time}"
+        except Exception as e:
+            print(f"Error parsing in_time or out_time for note_id {note_id}: {e}")
+            continue
+
+        metadata_filtered = []
+
+        # Process images if present
+        for img in metadata.get('images', []):
+            # Parse image study date and time
+            study_date = datetime.strptime(str(img['StudyDate']), "%Y%m%d")
+            study_time = datetime.strptime(f"{int(img['StudyTime']):06}", "%H%M%S").time()
+            final_datetime = pd.Timestamp(datetime.combine(study_date, study_time))
+
+            # Filter images within in_time and out_time
+            if in_time <= final_datetime <= out_time:
+                metadata_filtered.append((
+                    final_datetime,
+                    img['path'],
+                    img['PerformedProcedureStepDescription'],
+                    img['ViewPosition'],
+                    img['PatientOrientationCodeSequence_CodeMeaning']
+                ))
+
+        # Remove duplicates and sort data_paths by datetime
+        metadata_filtered = sorted(set(metadata_filtered), key=lambda x: x[0])
+
+        # Populate hash2meta dictionary
+        if hash_key:
+            hash2meta[hash_key] = {
+                "note_id": note_id,
+                "metadata_filtered": metadata_filtered,
+                "race": metadata['debug_features']['RACE'],
+                "age": metadata['debug_features']['AGE'],
+            }
+
+    return hash2meta
+
+class CXRDecisionTree:
+    def __init__(self):
+        self.priority_mapping = {
+            "PerformedProcedureStepDescription": {
+                "CHEST (PA AND LAT)": 1,  
+                "CHEST (PRE-OP PA AND LAT)": 1,
+                "CHEST (PA AND LAT) PORT": 2, 
+                "CHEST (PORTABLE AP)": 3,
+                "CHEST (SINGLE VIEW)": 4, 
+                "CHEST (SINGLE VIEW) PORT": 5, 
+                "DX CHEST PORTABLE PICC LINE PLACEMENT": 6,  
+                "DX CHEST PORT LINE/TUBE PLCMT 3 EXAMS": 6,  
+                "CHEST PORT. LINE PLACEMENT": 6, 
+                "TRAUMA #2 (AP CXR AND PELVIS PORT)": 7,  
+                "TRAUMA #3 (PORT CHEST ONLY)": 7,  
+                "ABD PORT LINE/TUBE PLACEMENT 1 EXAM": 8, 
+                "ABD PORT LINE/TUBE PLACEMENT 1 EXAM PORT": 8,  
+                "PORTABLE ABDOMEN": 9, 
+                "OTHER": 99 
+            },
+            "ViewPosition": {
+                "PA": 1,  
+                "AP": 2, 
+                "LATERAL": 3,  
+                "LL": 3, 
+                "OTHER": 99  
+            },
+            "PatientOrientationCodeSequence_CodeMeaning": {
+                "Erect": 1,
+                "Recumbent": 2, 
+                "OTHER": 99 
+            }
+        }
+
+    def get_priority(self, value, category):
+        return self.priority_mapping.get(category, {}).get(value, 99)
+
+    def select_best_cxr(self, data):
+        self.data = data
+        if not self.data:
+            return None 
+
+        sorted_data = sorted(
+            self.data,
+            key=lambda x: (
+                self.get_priority(x[2], "PerformedProcedureStepDescription"),
+                self.get_priority(x[3], "ViewPosition"),
+                self.get_priority(x[4], "PatientOrientationCodeSequence_CodeMeaning"),
+                -x[0].timestamp()
+            )
+        )
+
+        return sorted_data[0]
+    
+    def select_recent_cxr(self, data):
+        self.data = data
+        if not self.data:
+            return None 
+
+        sorted_data = sorted(
+            self.data,
+            key=lambda x: -x[0].timestamp()
+        )
+
+        return sorted_data[0]

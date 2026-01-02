@@ -1,0 +1,24 @@
+# Ignore unnecessary files
+.DS_Store
+*.log
+*.png
+*.pdf
+__pycache__/
+.vscode/
+*.txt
+*.json
+*.jsonl
+former/
+previous/
+processed_data/
+wandb/
+analyze/
+prediction/
+finetuned_model/
+hoonick/
+finetuned_model_new/
+inference_result/
+dataset/
+cache_images/
+*.sh/
+zeroshot/

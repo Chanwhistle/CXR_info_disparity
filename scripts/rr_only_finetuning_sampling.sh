@@ -1,0 +1,37 @@
+#!/bin/bash
+export CUDA_VISIBLE_DEVICES=7
+NUM_GPUS=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
+
+# 모델과 데이터 경로 설정
+MODEL_NAME="meta-llama/Llama-3.2-11B-Vision-Instruct"
+OUTPUT_BASE="../finetuned_model_new"
+
+for LR in 5e-5; do
+  for BATCH_SIZE in 16; do
+    for SEED in 9 99 999 9999 99999; do
+      OUTPUT_PATH="${OUTPUT_BASE}/rr/seed_${SEED}"
+      python finetuning.py \
+          --model_name_or_path "${MODEL_NAME}" \
+          --output_path "${OUTPUT_PATH}" \
+          --checkpoint_dir "${OUTPUT_PATH}" \
+          --batch_size ${BATCH_SIZE} \
+          --lr ${LR} \
+          --num_epochs 30 \
+          --gradient_accumulation_steps 1 \
+          --lora_setting 2 \
+          --use_rad_report \
+          --seed "${SEED}" \
+          # --wandb \
+            
+      python inference.py \
+          --model_name_or_path "${MODEL_NAME}" \
+          --output_path "${OUTPUT_PATH}" \
+          --checkpoint_dir "${OUTPUT_PATH}" \
+          --batch_size 1 \
+          --lora_setting 2 \
+          --use_rad_report \
+          --seed "${SEED}"
+
+    done   
+  done   
+done   
