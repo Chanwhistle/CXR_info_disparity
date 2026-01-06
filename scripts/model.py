@@ -80,18 +80,9 @@ class LlamaMortalityClassificationModel(nn.Module):
             for param in self.base_model.multi_modal_projector.parameters():
                 param.requires_grad = False
         else:
-            if self.args.lora_setting == 1:
-                print("Freeze vision model")
-                for param in self.base_model.vision_model.parameters():
-                    param.requires_grad = False
-            elif self.args.lora_setting == 2:
-                print("Train vision model with LoRA")
-                self.base_model.vision_model.add_adapter(lora_config, adapter_name="vision_model_adapter")
-                self.base_model.vision_model.set_adapter("vision_model_adapter")
-            elif self.args.lora_setting == 3:
-                print("Train vision model")
-                for param in self.base_model.vision_model.parameters():
-                    param.requires_grad = True
+            print("Train vision model with LoRA")
+            self.base_model.vision_model.add_adapter(lora_config, adapter_name="vision_model_adapter")
+            self.base_model.vision_model.set_adapter("vision_model_adapter")
 
     def gradient_checkpointing_enable(self, **kwargs) -> None:
         """Enable gradient checkpointing if supported."""
@@ -208,23 +199,14 @@ def load_model(
             print(f"Loaded language model LoRA adapter...")
 
             if args.use_cxr_image:
-                if args.lora_setting == 1:
-                    pass
-                elif args.lora_setting == 2:
-                    vm_adapter_state = map_adapter_keys(torch.load(checkpoint_path / "vm_adapter.bin", map_location="cpu", weights_only=False), "vision_model_adapter")
-                    current_state_dict = model.base_model.vision_model.state_dict()
-                    load_adapter(current_state_dict, vm_adapter_state)
-                    model.base_model.vision_model.load_state_dict(current_state_dict, strict=False)
-                    print(f"Loaded vision model LoRA adapter...")
-                elif args.lora_setting == 3:
-                    vision_encoder_state = torch.load(checkpoint_path / "vision_encoder.bin", map_location="cpu", weights_only=False)
-                    model.base_model.vision_model.load_state_dict(vision_encoder_state, strict=False)
-                    print(f"Loaded vision encoder...")
-                else:
-                    print("Wrong lora setting!")
+                vm_adapter_state = map_adapter_keys(torch.load(checkpoint_path / "vm_adapter.bin", map_location="cpu", weights_only=False), "vision_model_adapter")
+                current_state_dict = model.base_model.vision_model.state_dict()
+                load_adapter(current_state_dict, vm_adapter_state)
+                model.base_model.vision_model.load_state_dict(current_state_dict, strict=False)
+                print(f"Loaded vision model LoRA adapter...")
 
                 multi_modal_projector_state = torch.load(checkpoint_path / "multi_modal_projector.bin", map_location="cpu", weights_only=True)
-                model.base_model.multi_modal_projector.load_state_dict(multi_modal_projector_state, strict=False)
+                model.base_model.multi_modal_projector.load_state_dict(multi_modal_projector_state)
                 print(f"Loaded multimodal projector...")
             
         return model, processor

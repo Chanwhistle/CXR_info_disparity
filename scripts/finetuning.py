@@ -6,7 +6,7 @@ from model import load_model
 from trl import SFTConfig
 from utils import AdapterOnlySFTTrainer, load_data, get_args, compute_metrics_auroc
 from dataloader import VLM_Dataset, custom_data_collator
-from transformers import EarlyStoppingCallback, AdamW
+from transformers import EarlyStoppingCallback
 import warnings
 
 warnings.filterwarnings(
@@ -20,7 +20,7 @@ def train(args):
     eval_data = load_data(args.dev_data_path, args.summary_type)
     print(f"TOTAL TRAIN DATASET : {len(train_data)}")
     print(f"TOTAL EVAL  DATASET : {len(eval_data)}")
-    
+
     if args.debug:
         train_data = train_data[:20]
         eval_data = eval_data[:5]
@@ -46,13 +46,6 @@ def train(args):
         inference=False
         )    
     model.config.use_cache = False
-    
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    if (args.wandb) and (local_rank == 0):
-        wandb.init(
-            project="New-BCH", 
-            config=vars(args)
-        )
 
     training_args = SFTConfig(
         output_dir=args.output_path,
@@ -75,7 +68,6 @@ def train(args):
         gradient_checkpointing=True,
         overwrite_output_dir=True,
         remove_unused_columns=False,
-        # ddp_find_unused_parameters=False,
         ddp_find_unused_parameters=True,
         fp16=False,
         bf16=True,
@@ -114,5 +106,4 @@ if __name__ == "__main__":
     print(f"Use CXR image        : {args.use_cxr_image}")
     print(f"Use Radiology note   : {args.use_rad_report}")
     print(f"Use Discharge note   : {args.use_discharge_note}")
-    print(f"LoRA Settting        : {args.lora_setting}")
     train(args)

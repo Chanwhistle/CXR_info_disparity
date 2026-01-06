@@ -90,7 +90,7 @@ def prepare_loader(summary_type, args, set, processor):
     
     data = load_data(data_path, summary_type)
     if args.debug:
-        data = data[:30]
+        data = data[:70]
     
     dataset = VLM_Dataset(
         args, 
@@ -118,28 +118,12 @@ def load_data(path, summary_type):
     with open(path, "r") as file:
         for line in file:
             sample = json.loads(line)
-            if summary_type == "merged":
-                for summary_type_partial in ["plain", "risk_factor", "timeline"]:
-                    dataset.append({'id' : sample['id'],
-                                'label' : sample['label'],
-                                'text' : sample[summary_type_partial],
-                                'summary_type' : summary_type_partial})
-            else:
-                dataset.append({'id' : sample['id'],
-                            'label' : sample['label'],
-                            'text' : sample[summary_type],
-                            'summary_type' : summary_type})
+            dataset.append({'id' : sample['id'],
+                        'label' : sample['label'],
+                        'text' : sample[summary_type],
+                        'summary_type' : summary_type})
+                
     return dataset
-
-def round_numbers(obj, precision=4):
-    if isinstance(obj, float):
-        return round(obj, precision)
-    elif isinstance(obj, list):
-        return [round_numbers(x, precision) for x in obj]
-    elif isinstance(obj, dict):
-        return {k: round_numbers(v, precision) for k, v in obj.items()}
-    else:
-        return obj
         
 def compute_metrics_auroc(eval_pred):
     logits, labels = eval_pred
@@ -165,58 +149,175 @@ def map_adapter_keys(adapter_state, adapter_name="language_model_adapter"):
         mapped_state[mapped_key] = value
     return mapped_state
 
-def find_best_f1(labels, probs):
-    precisions, recalls, thresholds = precision_recall_curve(labels, [prob[1] for prob in probs])
-    precisions, recalls = precisions[:-1], recalls[:-1]
-    
-    f1_scores = np.zeros_like(thresholds)
-    valid_indices = (precisions + recalls) > 0
-    f1_scores[valid_indices] = 2 * (precisions[valid_indices] * recalls[valid_indices]) / (precisions[valid_indices] + recalls[valid_indices])
-    best_threshold = thresholds[np.argmax(f1_scores)]
-    
-    return best_threshold
 
-def log_result(labels, probs, best_threshold, output_path, summary_type, set_type):
-    pos_probs = [p[1] for p in probs]
-    preds = [1 if p >= best_threshold else 0 for p in pos_probs]
-    best_positive_f1 = f1_score(labels, preds)
-    auroc = float(roc_auc_score(labels, pos_probs))
-    auprc = float(average_precision_score(labels, pos_probs))
-    total_pos = 100 * sum(1 for ele in preds if ele == 1) / len(preds)
+import os
+import numpy as np
+from sklearn.metrics import roc_auc_score, average_precision_score, brier_score_loss
+
+def compute_ece(labels, pos_probs, n_bins=10):
+    """
+    Expected Calibration Error (ECE) 계산
     
+    Args:
+        labels: 실제 라벨 (0 or 1)
+        pos_probs: positive class 예측 확률
+        n_bins: calibration을 계산할 bin 개수
+    
+    Returns:
+        ece: Expected Calibration Error
+    """
+    labels = np.asarray(labels).astype(int)
+    pos_probs = np.asarray(pos_probs).astype(float)
+    
+    # bin 경계 생성
+    bin_boundaries = np.linspace(0, 1, n_bins + 1)
+    bin_lowers = bin_boundaries[:-1]
+    bin_uppers = bin_boundaries[1:]
+    
+    ece = 0.0
+    for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
+        # 각 bin에 속하는 샘플 찾기
+        in_bin = (pos_probs > bin_lower) & (pos_probs <= bin_upper)
+        prop_in_bin = np.mean(in_bin)
+        
+        if prop_in_bin > 0:
+            # bin 내 평균 confidence (예측 확률)
+            avg_confidence_in_bin = np.mean(pos_probs[in_bin])
+            # bin 내 실제 accuracy (실제 positive 비율)
+            avg_accuracy_in_bin = np.mean(labels[in_bin])
+            # ECE에 기여
+            ece += np.abs(avg_confidence_in_bin - avg_accuracy_in_bin) * prop_in_bin
+    
+    return float(ece)
+
+def _bootstrap_ci_auc_pr(labels, pos_probs, n_boot=10000, seed=42, stratified=True, alpha=0.05):
+    labels = np.asarray(labels).astype(int)
+    pos_probs = np.asarray(pos_probs).astype(float)
+
+    rng = np.random.default_rng(seed)
+
+    n = len(labels)
+    pos_idx = np.where(labels == 1)[0]
+    neg_idx = np.where(labels == 0)[0]
+
+    roc_samples = []
+    pr_samples = []
+
+    for _ in range(n_boot):
+        if stratified:
+            # 클래스 비율 유지하면서 복원추출
+            if len(pos_idx) == 0 or len(neg_idx) == 0:
+                # 한 클래스면 bootstrap 의미 없음
+                break
+            boot_pos = rng.choice(pos_idx, size=len(pos_idx), replace=True)
+            boot_neg = rng.choice(neg_idx, size=len(neg_idx), replace=True)
+            boot_idx = np.concatenate([boot_pos, boot_neg])
+        else:
+            boot_idx = rng.choice(np.arange(n), size=n, replace=True)
+
+        yt = labels[boot_idx]
+        ys = pos_probs[boot_idx]
+
+        if len(np.unique(yt)) < 2:
+            continue
+
+        roc_samples.append(roc_auc_score(yt, ys))
+        pr_samples.append(average_precision_score(yt, ys))
+
+    roc_samples = np.asarray(roc_samples, dtype=float)
+    pr_samples = np.asarray(pr_samples, dtype=float)
+
+    if len(roc_samples) == 0 or len(pr_samples) == 0:
+        return None, None, 0
+
+    lo = 100 * (alpha / 2)
+    hi = 100 * (1 - alpha / 2)
+
+    auroc_ci = (float(np.percentile(roc_samples, lo)), float(np.percentile(roc_samples, hi)))
+    auprc_ci = (float(np.percentile(pr_samples, lo)), float(np.percentile(pr_samples, hi)))
+
+    return auroc_ci, auprc_ci, int(min(len(roc_samples), len(pr_samples)))
+
+def log_result(args, labels, probs, output_path, set_type,
+               compute_ci=True, ci_method="bootstrap",
+               n_boot=10000, seed=42):
+    os.makedirs(output_path, exist_ok=True)
+
+    labels = np.asarray(labels).astype(int)
+    pos_probs = np.asarray([p[1] for p in probs], dtype=float)
+
+    uniq = np.unique(labels)
+
+    if len(uniq) < 2:
+        auroc = "NA"
+        auprc = "NA"
+        auroc_ci = "NA"
+        auprc_ci = "NA"
+        brier_score = "NA"
+        ece = "NA"
+        msg = f"[WARN] Only one class present in {set_type} labels: {uniq.tolist()} -> AUROC/AUPRC/CI/Brier/ECE set to NA"
+        print(msg)
+        n_boot_used = 0
+    else:
+        auroc = float(roc_auc_score(labels, pos_probs))
+        auprc = float(average_precision_score(labels, pos_probs))
+        
+        # Brier Score 계산
+        brier_score = float(brier_score_loss(labels, pos_probs))
+        
+        # Expected Calibration Error (ECE) 계산
+        ece = compute_ece(labels, pos_probs, n_bins=10)
+
+        auroc_ci = "NA"
+        auprc_ci = "NA"
+        n_boot_used = 0
+
+        if compute_ci:
+            if ci_method.lower() == "bootstrap":
+                auroc_ci, auprc_ci, n_boot_used = _bootstrap_ci_auc_pr(
+                    labels, pos_probs, n_boot=n_boot, seed=seed, stratified=True
+                )
+                if auroc_ci is None:
+                    auroc_ci, auprc_ci = "NA", "NA"
+            else:
+                raise ValueError("ci_method must be 'bootstrap' (AUPRC CI는 보통 bootstrap만 씁니다).")
+
     score_file = os.path.join(output_path, "score.txt")
     with open(score_file, "a") as f:
-        f.write(f"{set_type} evaluation completed\n")
-        f.write(f"Summary type        : {summary_type}\n")
-        f.write(f"Positive prediction : {sum(1 for ele in preds if int(ele)==1)}, Negative prediction: {sum(1 for ele in preds if int(ele)==0)}\n")
-        f.write(f"Pos/Total           : {total_pos}%\n")
-        f.write(f"Threshold           : {best_threshold}\n")
-        f.write(f"Positive f1         : {best_positive_f1}\n")
+        f.write(f"{args.summary_type}{'_add_pi' if args.use_pi else ''} {set_type} evaluation completed\n")
+        f.write(f"Num samples          : {len(labels)}\n")
+        f.write(f"Num positives        : {int(labels.sum())}\n")
+        f.write(f"Num negatives        : {int((labels == 0).sum())}\n")
         f.write(f"AUROC               : {auroc}\n")
         f.write(f"AUPRC               : {auprc}\n")
-        f.write(classification_report(labels, preds, digits=4))
-        f.write(f"Prediction evaluated on {len(preds)} instances. Make sure that this number match with your original dataset!\n\n")
+        f.write(f"Brier Score         : {brier_score}\n")
+        f.write(f"ECE (10 bins)       : {ece}\n")
+
+        if compute_ci:
+            f.write(f"CI method           : {ci_method}\n")
+            if ci_method.lower() == "bootstrap":
+                f.write(f"Bootstrap n         : {n_boot_used}/{n_boot}\n")
+            f.write(f"AUROC 95% CI        : {auroc_ci}\n")
+            f.write(f"AUPRC 95% CI        : {auprc_ci}\n")
+
+        f.write("\n")
 
     print(f"Inference complete. Predictions saved to {output_path}")
-    
-def compute_vote_predictions(predictions):
-    """
-    세 summary type의 예측 결과에서 soft vote와 any vote 예측값을 계산합니다.
-    predictions: (plain_preds, risk_factor_preds, timeline_preds)
-    각 예측값은 [prob_negative, prob_positive] 형식이라고 가정합니다.
-    """
-    plain_preds, risk_factor_preds, timeline_preds = predictions
-    soft_votes = []
-    any_votes = []
-    
-    for p, rf, t in zip(plain_preds, risk_factor_preds, timeline_preds):
-        p_pos, rf_pos, t_pos = p[1], rf[1], t[1]
-        average_pos_prob = (p_pos + rf_pos + t_pos) / 3.0
-        soft_votes.append([1 - average_pos_prob, average_pos_prob])
-        max_pos_prob = max(p_pos, rf_pos, t_pos)
-        any_votes.append([1 - max_pos_prob, max_pos_prob])
-        
-    return soft_votes, any_votes
+
+
+# Set all random seeds for reproducibility
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+    torch.use_deterministic_algorithms(True)
+
 
 def get_args():
     parser = argparse.ArgumentParser(
@@ -230,7 +331,7 @@ def get_args():
     parser.add_argument(
         "--checkpoint_dir", 
         type=str, 
-        default="../finetuned_model",
+        default="../trained_models",
         help="Hugging Face Hub or local path"
     )
     parser.add_argument(
@@ -277,30 +378,28 @@ def get_args():
     )
     parser.add_argument(
         "--base_img_dir", 
-        default="/hdd2/chanhwi/mimic-cxr-jpg-2.1.0.physionet.org/files", 
+        required=True,
         help="Path to a CXR img folder"
     )
     parser.add_argument(
         "--base_rr_dir", 
-        default="/hdd2/chanhwi/physionet.org/files/mimic-cxr/2.1.0/files", 
+        required=True,
         help="Path to a radiology report folder"
     )
     parser.add_argument(
         "--output_path",
         type=str,
-        default='./finetuned_model', 
+        default='./trained_models', 
         help="Path to save outputs.",
     )
     parser.add_argument(
         "--summary_type", 
-        required=False,
         type=str,
         default='plain', 
         help="Discharge note summary type."
     )
     parser.add_argument(
         "--set_name", 
-        required=False,
         type=str,
         default='train', 
         help="set type."
@@ -316,12 +415,6 @@ def get_args():
         type=float, 
         default=5e-5, 
         help="Learing rate"
-    )
-    parser.add_argument(
-        '--lora_setting', 
-        type=int, 
-        default=2, 
-        help="Ablation setting for lora"
     )
     parser.add_argument(
         '--batch_size', 

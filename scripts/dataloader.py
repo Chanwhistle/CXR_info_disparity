@@ -58,7 +58,7 @@ class VLM_Dataset(Dataset):
             sample["text"] = None
         all_img_data_paths = self.hash2meta[item['id']]['metadata_filtered']
         selected_img_data_path = self.Decision_tree.select_best_cxr(all_img_data_paths)
-
+        
         if self.use_cxr_image:
             valid_image_path = [os.path.join(
                 self.args.base_img_dir,
@@ -94,6 +94,7 @@ class VLM_Dataset(Dataset):
 
     def _load_images(self, image_paths: list) -> list:
         images = []
+        
         cache_dir = os.path.join("cache_images")
         os.makedirs(cache_dir, exist_ok=True)
 
@@ -107,7 +108,7 @@ class VLM_Dataset(Dataset):
 
             cache_name = os.path.basename(img_path) + ".pt"
             cache_path = os.path.join(cache_dir, cache_name)
-
+            
             if os.path.exists(cache_path):
                 tensor_img = torch.load(cache_path, map_location="cpu", weights_only=False)
             else:
@@ -165,12 +166,6 @@ class VLM_Dataset(Dataset):
                 f"Here is the clinical discharge document:\n{dn}\n\n"
                 "Please generate a summary of overall ICU discharge note that includes important clinical information while excluding all findings related to chest imaging (including x-ray, CT, or other imaging modalities). "
                 "Write the summary as concise, clear, and well-organized bullet points."
-                
-                # f"Here is the clinical discharge document:\n{dn}\n\n"
-                # "Please generate a summary of overall ICU discharge note that includes important clinical information. "
-                # "However make sure to include a separate dedicated section for CXR and Chest CT findings using \'### CXR and Chest CT\' header dedicated to ONLY chest imaging findings, "
-                # "using bullet points to describe report details and clinical implications."
-                # "Write the summary as concise, clear, and well-organized bullet points. "
             )
 
         elif prompt_type == "risk_factor":
@@ -230,8 +225,6 @@ class VLM_Dataset(Dataset):
         return system_prompt, user_prompt
 
     def _get_prompt(self, dn=None, images=None, rr=None, pi=None):
-        # discharge note only
-
         if len(pi) > 1:
             personal_information = f"AGE : {pi['age']}, RACE : {pi['race']}"
         else:
@@ -244,7 +237,6 @@ class VLM_Dataset(Dataset):
             )
             user_prompt = (
                 f"Here is the clinical document:\n{personal_information} {dn}\n\n"
-                # f"Here is the clinical discharge document:\n{dn}\n\n"
                 "Based on the clinical information provided, how likely is the patient's out-of-hospital mortality within 30 days? "
                 "Please do not explain the reason and respond with one word only: 0:alive, 1:death.\n\nAssistant:"
             )
@@ -277,7 +269,6 @@ class VLM_Dataset(Dataset):
             )
             user_prompt = (
                 f"Here is the clinical document:\n{personal_information} {dn}\n\n"
-                # f"Here is the clinical discharge document:\n{dn}\n\n"
                 f"Here is the radiology report:\n{rr}\n\n"
                 "Based on the provided clinical information and radiology report, how likely is the patient's out-of-hospital mortality within 30 days? "
                 "Please do not explain the reason and respond with one word only: 0:alive, 1:death.\n\nAssistant:"
@@ -289,8 +280,7 @@ class VLM_Dataset(Dataset):
                 "Based on the clinical context and the provided CXR image, assess how likely the patient's out-of-hospital mortality is within 30 days."
             )
             user_prompt = (
-                # f"Here is the clinical document:\n{personal_information} {dn}\n\n"
-                f"Here is the clinical discharge document:\n{dn}\n\n"
+                f"Here is the clinical document:\n{personal_information} {dn}\n\n"
                 "Based on the provided clinical information and single CXR image, how likely is the patient's out-of-hospital mortality within 30 days? "
                 "Please do not explain the reason and respond with one word only: 0:alive, 1:death.\n\nAssistant:"
             )
@@ -317,28 +307,28 @@ def custom_data_collator(processor, use_cxr_image=False, summary_type="plain"):
             filtered_examples = examples
         else:
             filtered_examples = [ex for ex in examples if ex["summary_type"] == summary_type]
+
         texts = []
-        images = []
+        images_nested = []   # <-- 핵심: nested list
         ids = []
         labels = []
-        
+
         for example in filtered_examples:
             texts.append(processor.apply_chat_template(example["chat_template"], tokenize=False))
             ids.append(example["id"])
             labels.append(example["label"])
+
             if use_cxr_image:
-                if example.get("image") is not None:
-                    if isinstance(example["image"], list):
-                        images.append(example["image"][0])
-                    else:
-                        images.append(example["image"])
+                # example["image"] 는 __getitem__에서 보통 [tensor_img] 형태
+                if example.get("image") is not None and isinstance(example["image"], list) and len(example["image"]) > 0:
+                    images_nested.append([example["image"][0]])  # <-- 샘플별로 리스트로 감싸기
                 else:
-                    images.append(None)
-        
+                    images_nested.append([])  # <-- 이미지 없는 샘플은 None 말고 빈 리스트
+
         if use_cxr_image:
             batch = processor(
                 text=texts,
-                images=images,
+                images=images_nested,      # <-- flat list가 아니라 nested list
                 return_tensors="pt",
                 padding=True,
                 truncation=False
@@ -350,12 +340,13 @@ def custom_data_collator(processor, use_cxr_image=False, summary_type="plain"):
                 padding=True,
                 truncation=False
             )
-        
+
         batch["ids"] = ids
         batch["labels"] = torch.tensor(labels, dtype=torch.long)
         return batch
 
     return collate_fn
+
 
 def load_hash2meta_dict(mapper_path, image_path):
     # Load note2hash mapping
