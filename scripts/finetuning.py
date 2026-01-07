@@ -63,7 +63,7 @@ def train(args):
         lr_scheduler_kwargs={"power": 0.5},
         report_to=["wandb"] if args.wandb else [],
         save_total_limit=1,
-        logging_steps=10,
+        logging_steps=100,
         dataloader_pin_memory=False,
         gradient_checkpointing=True,
         overwrite_output_dir=True,
@@ -76,14 +76,18 @@ def train(args):
         load_best_model_at_end=True,
     )
     
+    # Set padding side to right to avoid overflow issues in half-precision training
+    processor.tokenizer.padding_side = 'right'
+    
     trainer = AdapterOnlySFTTrainer(
         model=model,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         data_collator=custom_data_collator(processor, use_cxr_image=args.use_cxr_image, summary_type=args.summary_type),
-        processing_class=processor.tokenizer,
+        tokenizer=processor.tokenizer,
         compute_metrics=compute_metrics_auroc,
         args=training_args,
+        max_seq_length=8192,
         use_cxr_image=args.use_cxr_image
     )
 

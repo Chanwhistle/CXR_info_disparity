@@ -13,6 +13,9 @@ from trl import SFTTrainer
 from dataloader import *
 import numpy as np
 
+
+from sklearn.metrics import roc_auc_score, average_precision_score, brier_score_loss
+
 class AdapterOnlySFTTrainer(SFTTrainer):
     def __init__(self, *args, **kwargs):
         self.use_cxr_image = kwargs.pop('use_cxr_image')
@@ -127,11 +130,24 @@ def load_data(path, summary_type):
         
 def compute_metrics_auroc(eval_pred):
     logits, labels = eval_pred
-    probabilities = F.softmax(torch.tensor(logits), dim=-1).numpy()
-    predictions = (probabilities[:, 1] >= 0.5)
-    auroc = roc_auc_score(labels, probabilities[:, 1])    
-    f1 = f1_score(labels, predictions)
-    return {"auroc": auroc, "f1": f1}
+    if isinstance(logits, (tuple, list)):
+        logits = logits[0]
+
+    probabilities = F.softmax(torch.tensor(logits), dim=-1).detach().cpu().numpy()
+    y_score = probabilities[:, 1]
+
+    metrics = {}
+    try:
+        metrics["auroc"] = roc_auc_score(labels, y_score)
+    except ValueError:
+        metrics["auroc"] = float("nan")
+
+    try:
+        metrics["auprc"] = average_precision_score(labels, y_score)
+    except ValueError:
+        metrics["auprc"] = float("nan")
+
+    return metrics
 
 def load_adapter(current_state_dict, adapter_state):
     for key, value in adapter_state.items():
@@ -148,11 +164,6 @@ def map_adapter_keys(adapter_state, adapter_name="language_model_adapter"):
         mapped_key = '.'.join(parts)
         mapped_state[mapped_key] = value
     return mapped_state
-
-
-import os
-import numpy as np
-from sklearn.metrics import roc_auc_score, average_precision_score, brier_score_loss
 
 def compute_ece(labels, pos_probs, n_bins=10):
     """
