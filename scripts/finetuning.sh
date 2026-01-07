@@ -10,7 +10,7 @@ RR_DIR="../physionet.org/files/mimic-cxr/2.1.0/files"
 for BATCH_SIZE in 8; do
   for SUMMARY_TYPE in plain; do
     for LR in 5e-5; do
-      for COUNT in 1 2 3 4 5 6 7 8 9 10; do
+      for COUNT in 2 3 4 5 6 7 8 9 10; do
         OUTPUT_PATH="${OUTPUT_BASE}/img/${COUNT}"
         python finetuning.py \
             --model_name_or_path ${MODEL_NAME} \
@@ -21,7 +21,7 @@ for BATCH_SIZE in 8; do
             --base_img_dir "${CXR_DIR}" \
             --base_rr_dir "${RR_DIR}" \
             --lr ${LR} \
-            --num_epochs 20 \
+            --num_epochs 10 \
             --gradient_accumulation_steps 1 \
             --use_cxr_image \
                 

@@ -59,7 +59,7 @@ def train(args):
         save_strategy="epoch",
         optim="adamw_hf",
         lr_scheduler_type="polynomial",
-        warmup_ratio=0.2,
+        warmup_ratio=0.1,
         lr_scheduler_kwargs={"power": 0.5},
         report_to=["wandb"] if args.wandb else [],
         save_total_limit=1,
