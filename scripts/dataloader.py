@@ -18,16 +18,40 @@ class VLM_Dataset(Dataset):
                  use_rad_report=False, 
                  use_discharge_note=False,
                  shuffle=False,
-                 summarize=False):
+                 summarize=False,
+                 split=None):
         self.args = args
         self.data_list = data_list
         self.use_cxr_image = use_cxr_image
         self.use_rad_report = use_rad_report
         self.use_discharge_note = use_discharge_note
         self.summarize = summarize
+        
+        # Auto-detect split from metadata_image_path if not provided
+        if split is None:
+            metadata_path_lower = metadata_image_path.lower()
+            if 'train' in metadata_path_lower:
+                self.split = 'train'
+            elif 'dev' in metadata_path_lower or 'val' in metadata_path_lower:
+                self.split = 'dev'
+            elif 'test' in metadata_path_lower:
+                self.split = 'test'
+            else:
+                # Try to match with args metadata paths
+                if hasattr(args, 'train_metadata_image_path') and metadata_image_path == args.train_metadata_image_path:
+                    self.split = 'train'
+                elif hasattr(args, 'dev_metadata_image_path') and metadata_image_path == args.dev_metadata_image_path:
+                    self.split = 'dev'
+                elif hasattr(args, 'test_metadata_image_path') and metadata_image_path == args.test_metadata_image_path:
+                    self.split = 'test'
+                else:
+                    self.split = None  # Cannot determine split
+        else:
+            self.split = split
+        
         self.hash2meta = load_hash2meta_dict(args.metadata_path, metadata_image_path)
         self.Decision_tree = CXRDecisionTree()
-
+        
         if shuffle:
             random.seed(50)
             random.shuffle(self.data_list)        
@@ -57,23 +81,25 @@ class VLM_Dataset(Dataset):
         else:
             sample["text"] = None
         all_img_data_paths = self.hash2meta[item['id']]['metadata_filtered']
-        selected_img_data_path = self.Decision_tree.select_best_cxr(all_img_data_paths)
-        
+        selected_img_data = self.Decision_tree.select_best_cxr(all_img_data_paths)
+        selected_img_data_path = selected_img_data[1]
+
         if self.use_cxr_image:
-            valid_image_path = [os.path.join(
-                self.args.base_img_dir,
-                selected_img_data_path[1]
-            )]
-            sample["image"] = self._load_images(valid_image_path)
+            sample["image"] = self._load_images(selected_img_data_path)
         else:
             sample["image"] = None
 
-        if self.use_rad_report:            
-            valid_report_path = [os.path.join(
-                self.args.base_rr_dir,
-                '/'.join(selected_img_data_path[1].split("/")[:3]) + ".txt"
-            )]
-            sample["rad_report"] = self._load_reports(valid_report_path)
+        if self.use_rad_report:
+            if selected_img_data_path:
+                path_parts = selected_img_data_path.split("/")[:3]
+                if len(path_parts) == 3:
+                    rr_relative_path = '/'.join(path_parts) + ".txt"
+                    valid_report_path = [os.path.join(self.args.base_rr_dir, rr_relative_path)]
+                else:
+                    valid_report_path = []
+            else:
+                valid_report_path = []
+            sample["rad_report"] = self._load_reports(valid_report_path) if valid_report_path else None
         else:
             sample["rad_report"] = None
 
@@ -92,31 +118,21 @@ class VLM_Dataset(Dataset):
 
         return sample
 
-    def _load_images(self, image_paths: list) -> list:
+    def _load_images(self, mapped_image_path: str) -> list:
         images = []
         
-        cache_dir = os.path.join("cache_images")
-        os.makedirs(cache_dir, exist_ok=True)
-
-        for image_path in image_paths:
-            # resized path 결정
-            if "512_resized" in image_path.lower():
-                img_path = image_path
-            else:
-                base, ext = image_path.rsplit('.', 1)
-                img_path = f"{base}_512_resized.{ext}"
-
-            cache_name = os.path.basename(img_path) + ".pt"
-            cache_path = os.path.join(cache_dir, cache_name)
-            
-            if os.path.exists(cache_path):
-                tensor_img = torch.load(cache_path, map_location="cpu", weights_only=False)
-            else:
-                image = Image.open(img_path).convert("RGB")
-                tensor_img = to_tensor(image)
-                torch.save(tensor_img, cache_path)
-
-            images.append(tensor_img)
+        image_path = mapped_image_path.split("/")[-1]
+        name, extension = image_path.split(".")
+        if "_512_resized" in name:
+            real_image_path = os.path.join(self.args.base_img_dir, self.split, image_path)
+        else:
+            real_image_path = os.path.join(self.args.base_img_dir, self.split, f"{name}_512_resized.{extension}")
+        
+        assert os.path.exists(real_image_path), f"Image not found: {real_image_path}"
+                
+        img = Image.open(real_image_path).convert("RGB")
+        tensor_img = to_tensor(img)
+        images.append(tensor_img)
 
         return images
 
@@ -295,8 +311,20 @@ class VLM_Dataset(Dataset):
                 "Based on the provided CXR image and radiology report, how likely is the patient's out-of-hospital mortality within 30 days? "
                 "Please do not explain the reason and respond with one word only: 0:alive, 1:death.\n\nAssistant:"
             )
+        # Discharge note + CXR image + Radiology note (all three)
+        elif dn and images and rr:
+            system_prompt = (
+                "A clinical document, a single most recent chest X-ray (CXR) image, and a radiology report are provided. "
+                "Based on the clinical context, the CXR image, and the radiology report, assess how likely the patient's out-of-hospital mortality is within 30 days."
+            )
+            user_prompt = (
+                f"Here is the clinical document:\n{personal_information} {dn}\n\n"
+                f"Here is the radiology report:\n{rr}\n\n"
+                "Based on the provided clinical information, CXR image, and radiology report, how likely is the patient's out-of-hospital mortality within 30 days? "
+                "Please do not explain the reason and respond with one word only: 0:alive, 1:death.\n\nAssistant:"
+            )
         else:
-            raise ValueError("Please provide one of the following combinations:\n discharge note only,\n CXR image only,\n radiology note only,\n discharge note + radiology note,\n discharge note + CXR image,\n CXR image + radiology note.")
+            raise ValueError("Please provide one of the following combinations:\n discharge note only,\n CXR image only,\n radiology note only,\n discharge note + radiology note,\n discharge note + CXR image,\n CXR image + radiology note,\n discharge note + CXR image + radiology note.")
             
         return system_prompt, user_prompt
 
@@ -453,7 +481,8 @@ class CXRDecisionTree:
                 self.get_priority(x[2], "PerformedProcedureStepDescription"),
                 self.get_priority(x[3], "ViewPosition"),
                 self.get_priority(x[4], "PatientOrientationCodeSequence_CodeMeaning"),
-                -x[0].timestamp()
+                -x[0].timestamp(),
+                x[1]
             )
         )
 
