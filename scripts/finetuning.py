@@ -3,11 +3,10 @@ import wandb
 import torch
 import os
 from model import load_model
-from trl import SFTConfig
 import random
-from utils import AdapterOnlySFTTrainer, load_data, get_args, compute_metrics_auroc, set_seed
+from utils import AdapterOnlyTrainer, load_data, get_args, compute_metrics_auroc, set_seed
 from dataloader import VLM_Dataset, custom_data_collator
-from transformers import EarlyStoppingCallback
+from transformers import EarlyStoppingCallback, Trainer, TrainingArguments
 import warnings
 
 warnings.filterwarnings(
@@ -31,20 +30,26 @@ def train(args):
         train_data = train_data[:20]
         eval_data = eval_data[:5]
 
-    train_dataset = VLM_Dataset(args, 
-                                train_data, 
-                                args.train_metadata_image_path, 
-                                args.use_cxr_image,
-                                args.use_rad_report,
-                                args.use_discharge_note,
-                                shuffle=True)
-    eval_dataset = VLM_Dataset(args, 
-                               eval_data, 
-                               args.dev_metadata_image_path, 
-                               args.use_cxr_image,
-                               args.use_rad_report,
-                               args.use_discharge_note,
-                               shuffle=False)
+    train_dataset = VLM_Dataset(
+        args=args, 
+        data_list=train_data, 
+        metadata_image_path=args.train_metadata_image_path, 
+        use_cxr_image=args.use_cxr_image,
+        use_rad_report=args.use_rad_report,
+        use_generated_rad_report=args.use_generated_rad_report,
+        use_discharge_note=args.use_discharge_note,
+        shuffle=True
+    )
+    eval_dataset = VLM_Dataset(
+        args=args, 
+        data_list=eval_data, 
+        metadata_image_path=args.dev_metadata_image_path, 
+        use_cxr_image=args.use_cxr_image,
+        use_rad_report=args.use_rad_report,
+        use_generated_rad_report=args.use_generated_rad_report,
+        use_discharge_note=args.use_discharge_note,
+        shuffle=False
+    )
 
     model, processor = load_model(
         args,
@@ -53,7 +58,7 @@ def train(args):
         )    
     model.config.use_cache = False
 
-    training_args = SFTConfig(
+    training_args = TrainingArguments(
         output_dir=args.output_path,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
@@ -63,14 +68,14 @@ def train(args):
         logging_dir="./logs",
         eval_strategy="epoch",
         save_strategy="epoch",
-        max_grad_norm=0.5,   
+        max_grad_norm=1.0,   
         optim="adamw_hf",
         lr_scheduler_type="polynomial",
-        warmup_ratio=0.1,
+        warmup_ratio=0.05,
         lr_scheduler_kwargs={"power": 0.5},
         report_to=["wandb"] if args.wandb else [],
         save_total_limit=1,
-        logging_steps=100,
+        logging_steps=50,
         dataloader_pin_memory=False,
         gradient_checkpointing=True,
         overwrite_output_dir=True,
@@ -83,18 +88,17 @@ def train(args):
         load_best_model_at_end=True,
     )
     
-    # # Set padding side to right to avoid overflow issues in half-precision training
-    # processor.tokenizer.padding_side = 'right'
+    # Set padding side to right to avoid overflow issues in half-precision training
+    processor.tokenizer.padding_side = 'right'
     
-    trainer = AdapterOnlySFTTrainer(
+    trainer = AdapterOnlyTrainer(
         model=model,
+        args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         data_collator=custom_data_collator(processor, use_cxr_image=args.use_cxr_image, summary_type=args.summary_type),
         tokenizer=processor.tokenizer,
         compute_metrics=compute_metrics_auroc,
-        args=training_args,
-        max_seq_length=8192,
         use_cxr_image=args.use_cxr_image
     )
 

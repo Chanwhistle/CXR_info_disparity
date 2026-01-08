@@ -40,6 +40,7 @@ class LlamaMortalityClassificationModel(nn.Module):
         self.config = base_model.config
         self.custom_config = ModelConfig
         self.args = args
+        device = next(self.base_model.parameters()).device
         
         # Determine hidden size
         self.hidden_size = (
@@ -51,9 +52,8 @@ class LlamaMortalityClassificationModel(nn.Module):
         # Initialize classifier with same dtype as base model
         if not self.args.zeroshot:
             base_dtype = next(self.base_model.parameters()).dtype
-            self.classifier = nn.Linear(self.hidden_size, 2).to(base_dtype)     
+            self.classifier = nn.Linear(self.hidden_size, 2).to(device=device, dtype=base_dtype)     
             self.dropout = nn.Dropout(p=self.custom_config.lora_dropout)  
-            device = next(self.base_model.parameters()).device
             self.loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([1.0, 3.0], device=device))
             self._setup_lora()
     
@@ -124,17 +124,27 @@ class LlamaMortalityClassificationModel(nn.Module):
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 output_hidden_states=True,
-                **kwargs)
+                **kwargs
+            )
 
-            last_hidden_state = outputs.hidden_states[-1][:, -1, :]
-            logits = self.classifier(self.dropout(last_hidden_state))
+            hs = outputs.hidden_states[-1]  # (B, T, H)
+
+            if attention_mask is not None:
+                idx = attention_mask.long().sum(dim=1) - 1            # (B,)
+                idx = idx.clamp(min=0)                                
+                batch_idx = torch.arange(hs.size(0), device=hs.device)
+                pooled = hs[batch_idx, idx]                           # (B, H)
+            else:
+                pooled = hs[:, -1, :]
+
+            logits = self.classifier(self.dropout(pooled))
             output_dict = {"logits": logits}
 
             if labels is not None:
-                output_dict["loss"] = self.loss_fn(logits, labels)
+                output_dict["loss"] = self.loss_fn(logits.float(), labels.long())
 
-                
-            return output_dict   
+            return output_dict
+
         
         if self.args.summarize:     
             outputs = self.base_model.generate(
@@ -177,8 +187,6 @@ def load_model(
             Tuple of (model, processor/tokenizer)
         """
         processor = AutoProcessor.from_pretrained(model_id)
-        if not args.zeroshot:
-            processor.tokenizer.padding_side = 'left'
         processor.tokenizer.pad_token = "<|finetune_right_pad_id|>"
         base_model = MllamaForConditionalGeneration.from_pretrained(
             model_id,

@@ -19,8 +19,7 @@ class VLM_Dataset(Dataset):
                  use_generated_rad_report=False,
                  use_discharge_note=False,
                  shuffle=False,
-                 summarize=False,
-                 split=None):
+                 summarize=False):
         self.args = args
         self.data_list = data_list
         self.use_cxr_image = use_cxr_image
@@ -30,26 +29,23 @@ class VLM_Dataset(Dataset):
         self.summarize = summarize
         
         # Auto-detect split from metadata_image_path if not provided
-        if split is None:
-            metadata_path_lower = metadata_image_path.lower()
-            if 'train' in metadata_path_lower:
+        metadata_path_lower = metadata_image_path.lower()
+        if 'train' in metadata_path_lower:
+            self.split = 'train'
+        elif 'dev' in metadata_path_lower or 'val' in metadata_path_lower:
+            self.split = 'dev'
+        elif 'test' in metadata_path_lower:
+            self.split = 'test'
+        else:
+            # Try to match with args metadata paths
+            if hasattr(args, 'train_metadata_image_path') and metadata_image_path == args.train_metadata_image_path:
                 self.split = 'train'
-            elif 'dev' in metadata_path_lower or 'val' in metadata_path_lower:
+            elif hasattr(args, 'dev_metadata_image_path') and metadata_image_path == args.dev_metadata_image_path:
                 self.split = 'dev'
-            elif 'test' in metadata_path_lower:
+            elif hasattr(args, 'test_metadata_image_path') and metadata_image_path == args.test_metadata_image_path:
                 self.split = 'test'
             else:
-                # Try to match with args metadata paths
-                if hasattr(args, 'train_metadata_image_path') and metadata_image_path == args.train_metadata_image_path:
-                    self.split = 'train'
-                elif hasattr(args, 'dev_metadata_image_path') and metadata_image_path == args.dev_metadata_image_path:
-                    self.split = 'dev'
-                elif hasattr(args, 'test_metadata_image_path') and metadata_image_path == args.test_metadata_image_path:
-                    self.split = 'test'
-                else:
-                    self.split = None  # Cannot determine split
-        else:
-            self.split = split
+                self.split = None  
         
         self.hash2meta = load_hash2meta_dict(args.metadata_path, metadata_image_path)
         self.Decision_tree = CXRDecisionTree()
@@ -367,7 +363,7 @@ def custom_data_collator(processor, use_cxr_image=False, summary_type="plain"):
             filtered_examples = [ex for ex in examples if ex["summary_type"] == summary_type]
 
         texts = []
-        images_nested = []   # <-- 핵심: nested list
+        images_nested = []  
         ids = []
         labels = []
 
@@ -377,16 +373,15 @@ def custom_data_collator(processor, use_cxr_image=False, summary_type="plain"):
             labels.append(example["label"])
 
             if use_cxr_image:
-                # example["image"] 는 __getitem__에서 보통 [tensor_img] 형태
                 if example.get("image") is not None and isinstance(example["image"], list) and len(example["image"]) > 0:
-                    images_nested.append([example["image"][0]])  # <-- 샘플별로 리스트로 감싸기
+                    images_nested.append([example["image"][0]]) 
                 else:
-                    images_nested.append([])  # <-- 이미지 없는 샘플은 None 말고 빈 리스트
+                    images_nested.append([])  
 
         if use_cxr_image:
             batch = processor(
                 text=texts,
-                images=images_nested,      # <-- flat list가 아니라 nested list
+                images=images_nested,
                 return_tensors="pt",
                 padding=True,
                 truncation=False
@@ -401,8 +396,9 @@ def custom_data_collator(processor, use_cxr_image=False, summary_type="plain"):
 
         batch["ids"] = ids
         batch["labels"] = torch.tensor(labels, dtype=torch.long)
+        
         return batch
-
+    
     return collate_fn
 
 

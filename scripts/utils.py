@@ -9,19 +9,19 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 from sklearn.metrics import *
-from trl import SFTTrainer
+from transformers import Trainer
 from dataloader import *
 import numpy as np
 
 
 from sklearn.metrics import roc_auc_score, average_precision_score, brier_score_loss
 
-class AdapterOnlySFTTrainer(SFTTrainer):
+class AdapterOnlyTrainer(Trainer):
     def __init__(self, *args, **kwargs):
         self.use_cxr_image = kwargs.pop('use_cxr_image')
         super().__init__(*args, **kwargs)
 
-    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
+    def save_model(self, output_dir: Optional[str] = "None", _internal_call: bool = False):
         os.makedirs(output_dir, exist_ok=True)
         
         print("\n")
@@ -130,6 +130,10 @@ def load_data(path, summary_type):
     return dataset
         
 def compute_metrics_auroc(eval_pred):
+    
+    print("predictions type/shape:", type(eval_pred.predictions), getattr(eval_pred.predictions, "shape", None))
+    print("label_ids type/shape:", type(eval_pred.label_ids), getattr(eval_pred.label_ids, "shape", None))
+
     logits, labels = eval_pred
     if isinstance(logits, (tuple, list)):
         logits = logits[0]
