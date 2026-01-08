@@ -56,9 +56,9 @@ def test(args):
     model.eval()
     
     dev_loader = prepare_loader(args.summary_type, args, "dev", processor)
-    test_loader = prepare_loader(args.summary_type, args, "test", processor)
+    # test_loader = prepare_loader(args.summary_type, args, "test", processor)
     inference(model, device, dev_loader, args, set_type="dev")
-    inference(model, device, test_loader, args, set_type="test")
+    # inference(model, device, test_loader, args, set_type="test")
 
 if __name__ == "__main__":
     args = get_args()
