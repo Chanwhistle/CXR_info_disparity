@@ -53,7 +53,8 @@ class LlamaMortalityClassificationModel(nn.Module):
             base_dtype = next(self.base_model.parameters()).dtype
             self.classifier = nn.Linear(self.hidden_size, 2).to(base_dtype)     
             self.dropout = nn.Dropout(p=self.custom_config.lora_dropout)  
-            self.loss_fn = nn.CrossEntropyLoss()
+            device = next(self.base_model.parameters()).device
+            self.loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([1.0, 3.0], device=device))
             self._setup_lora()
     
     def _setup_lora(self) -> None:
@@ -131,6 +132,7 @@ class LlamaMortalityClassificationModel(nn.Module):
 
             if labels is not None:
                 output_dict["loss"] = self.loss_fn(logits, labels)
+
                 
             return output_dict   
         

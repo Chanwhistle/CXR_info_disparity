@@ -15,7 +15,8 @@ class VLM_Dataset(Dataset):
                  data_list, 
                  metadata_image_path, 
                  use_cxr_image=False, 
-                 use_rad_report=False, 
+                 use_rad_report=False,
+                 use_generated_rad_report=False,
                  use_discharge_note=False,
                  shuffle=False,
                  summarize=False,
@@ -24,6 +25,7 @@ class VLM_Dataset(Dataset):
         self.data_list = data_list
         self.use_cxr_image = use_cxr_image
         self.use_rad_report = use_rad_report
+        self.use_generated_rad_report = use_generated_rad_report
         self.use_discharge_note = use_discharge_note
         self.summarize = summarize
         
@@ -89,19 +91,40 @@ class VLM_Dataset(Dataset):
         else:
             sample["image"] = None
 
-        if self.use_rad_report:
+        if self.use_rad_report or self.use_generated_rad_report:
             if selected_img_data_path:
                 path_parts = selected_img_data_path.split("/")[:3]
                 if len(path_parts) == 3:
+                    # Original radiology report path
                     rr_relative_path = '/'.join(path_parts) + ".txt"
-                    valid_report_path = [os.path.join(self.args.base_rr_dir, rr_relative_path)]
+                    original_report_path = os.path.join(self.args.base_rr_dir, rr_relative_path)
+                    
+                    # Generated radiology report path (same dir, with 'generated_' prefix)
+                    report_dir = '/'.join(path_parts[:-1])
+                    report_filename = path_parts[-1] + ".txt"
+                    generated_rr_relative_path = f"{report_dir}/generated_{report_filename}"
+                    generated_report_path = os.path.join(self.args.base_rr_dir, generated_rr_relative_path)
                 else:
-                    valid_report_path = []
+                    original_report_path = None
+                    generated_report_path = None
             else:
-                valid_report_path = []
-            sample["rad_report"] = self._load_reports(valid_report_path) if valid_report_path else None
+                original_report_path = None
+                generated_report_path = None
+            
+            # Load original radiology report
+            if self.use_rad_report and original_report_path and os.path.exists(original_report_path):
+                sample["rad_report"] = self._load_reports([original_report_path])
+            else:
+                sample["rad_report"] = None
+            
+            # Load generated radiology report
+            if self.use_generated_rad_report and generated_report_path and os.path.exists(generated_report_path):
+                sample["generated_rad_report"] = self._load_reports([generated_report_path])
+            else:
+                sample["generated_rad_report"] = None
         else:
             sample["rad_report"] = None
+            sample["generated_rad_report"] = None
 
         if self.args.use_pi:
             sample["personal_information"] = {"race": self.hash2meta[item['id']]['race'],
@@ -112,7 +135,14 @@ class VLM_Dataset(Dataset):
         if self.summarize:
             system_prompt, user_prompt = self._get_prompt_summarize(self.args.summary_type, sample["original_note"])
         else:
-            system_prompt, user_prompt = self._get_prompt(dn=sample["text"], images=sample["image"], rr=sample["rad_report"], pi=sample["personal_information"])
+            # Determine which radiology report to use for prompt
+            # If use_generated_rad_report is True, use generated report; otherwise use original
+            if self.use_generated_rad_report and sample.get("generated_rad_report"):
+                rr_for_prompt = sample["generated_rad_report"]
+            else:
+                rr_for_prompt = sample["rad_report"]
+            
+            system_prompt, user_prompt = self._get_prompt(dn=sample["text"], images=sample["image"], rr=rr_for_prompt, pi=sample["personal_information"])
 
         sample["chat_template"] = self._load_chat_template(system_prompt, user_prompt, sample["image"])
 

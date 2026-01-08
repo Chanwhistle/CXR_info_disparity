@@ -101,6 +101,7 @@ def prepare_loader(summary_type, args, set, processor):
         image_path, 
         args.use_cxr_image,
         args.use_rad_report,
+        getattr(args, 'use_generated_rad_report', False),
         args.use_discharge_note,
         shuffle=False
     )
@@ -479,6 +480,11 @@ def get_args():
         '--use_rad_report', 
         action="store_true",
         help="Use radiology report"
+    )
+    parser.add_argument(
+        '--use_generated_rad_report', 
+        action="store_true",
+        help="Use generated radiology report (from CheXagent) instead of original"
     )
     parser.add_argument(
         '--use_discharge_note', 

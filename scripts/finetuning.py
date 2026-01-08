@@ -4,7 +4,8 @@ import torch
 import os
 from model import load_model
 from trl import SFTConfig
-from utils import AdapterOnlySFTTrainer, load_data, get_args, compute_metrics_auroc
+import random
+from utils import AdapterOnlySFTTrainer, load_data, get_args, compute_metrics_auroc, set_seed
 from dataloader import VLM_Dataset, custom_data_collator
 from transformers import EarlyStoppingCallback
 import warnings
@@ -62,7 +63,7 @@ def train(args):
         logging_dir="./logs",
         eval_strategy="epoch",
         save_strategy="epoch",
-        max_grad_norm=1.0,   
+        max_grad_norm=0.5,   
         optim="adamw_hf",
         lr_scheduler_type="polynomial",
         warmup_ratio=0.1,
@@ -82,8 +83,8 @@ def train(args):
         load_best_model_at_end=True,
     )
     
-    # Set padding side to right to avoid overflow issues in half-precision training
-    processor.tokenizer.padding_side = 'right'
+    # # Set padding side to right to avoid overflow issues in half-precision training
+    # processor.tokenizer.padding_side = 'right'
     
     trainer = AdapterOnlySFTTrainer(
         model=model,
@@ -109,7 +110,7 @@ def train(args):
 if __name__ == "__main__":
     args = get_args()
     os.makedirs(args.output_path, exist_ok=True)
-
+    set_seed(random.randint(1, 10000))
     print(f"Base model           : {args.model_name_or_path}")
     print(f"Base learning rate   : {args.lr}")
     print(f"Batch size           : {args.batch_size * args.gradient_accumulation_steps * torch.cuda.device_count()}")
