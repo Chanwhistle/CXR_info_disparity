@@ -1,11 +1,8 @@
-
-RR_DIR="../physionet.org/files/mimic-cxr/2.1.0/files"
-
-for INDEX in 56 71 143 179 221 1108 1149 1150 1219 1322; do
-    CUDA_VISIBLE_DEVICES=1 python visualize_attention_map.py \
+for INDEX in "0xf2977385a4be8500737657330572c6" "0x5558d145baf95199098c5ab393c8c1" "0x5f23090cdf667ac1769cb333d75775" "0x316e3d526bd3eab2889b31efef54e2"; do
+  CUDA_VISIBLE_DEVICES=5 python visualize_attention_map.py \
     --checkpoint_path ../trained_models/dn+img/checkpoint \
     --use_discharge_note \
-    --index ${INDEX} \
+    --unique_id "${INDEX}" \
     --base_img_dir ../saved_images \
     --target_layer all
-done   
+done

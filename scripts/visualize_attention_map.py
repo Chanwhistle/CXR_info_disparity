@@ -470,8 +470,10 @@ def main() -> None:
     p.add_argument("--target_layer", type=str, default="all",
                    choices=["all", "projector", "vit", "vit_local"],
                    help="Which layer(s) to visualize: 'all' for combined image, or single layer")
-    p.add_argument("--index", type=int, default=1021,
-                   help="Sample index (-1 for random)")
+    p.add_argument("--index", type=int, default=-1,
+                   help="Sample index (-1 for random, ignored if --unique_id is provided)")
+    p.add_argument("--unique_id", type=str, default=None,
+                   help="Sample unique ID (takes precedence over --index)")
     p.add_argument("--target_class", type=int, default=1, choices=[0, 1],
                    help="0=alive, 1=death")
     p.add_argument("--output_dir", type=str, default="./attention_outputs")
@@ -565,9 +567,29 @@ def main() -> None:
         shuffle=False,
     )
 
-    idx = random.randrange(len(dataset)) if args.index < 0 else args.index
+    # Determine index: unique_id takes precedence over index
+    if args.unique_id is not None:
+        # Find index by unique_id
+        idx = None
+        for i, item in enumerate(test_data):
+            if item["id"] == args.unique_id:
+                idx = i
+                break
+        if idx is None:
+            raise ValueError(f"Sample with unique_id '{args.unique_id}' not found in dataset")
+        print(f"[INFO] Found sample with unique_id '{args.unique_id}' at index {idx}")
+    elif args.index < 0:
+        idx = random.randrange(len(dataset))
+        print(f"[INFO] Randomly selected index: {idx}")
+    else:
+        idx = args.index
+    
     ex = dataset[idx]
     sample_id = ex["id"]
+    
+    # Verify unique_id matches if provided
+    if args.unique_id is not None and sample_id != args.unique_id:
+        raise ValueError(f"Mismatch: requested unique_id '{args.unique_id}' but got '{sample_id}' at index {idx}")
 
     # Get image tensor from dataset (same as inference.py uses via collator)
     img_path = _resolve_real_image_path(dataset, sample_id, args.base_img_dir)

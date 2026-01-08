@@ -9,7 +9,7 @@ RR_DIR="../physionet.org/files/mimic-cxr/2.1.0/files"
 
 for BATCH_SIZE in 4; do
   for SUMMARY_TYPE in plain; do
-    for LR in 5e-5; do
+    for LR in 3e-5; do
       for COUNT in 1 2 3 4 5; do
         OUTPUT_PATH="${OUTPUT_BASE}/img/${COUNT}"
         python finetuning.py \
