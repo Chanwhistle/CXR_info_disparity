@@ -16,3 +16,5 @@ dataset/
 cache_images/
 physionet.org/
 saved_images/
+attention_outputs/
+trained_models/

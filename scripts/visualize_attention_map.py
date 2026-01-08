@@ -44,18 +44,38 @@ from utils import load_adapter, map_adapter_keys  # noqa: E402
 # ---------------------------------------------------------------------------
 # Helper: pick last transformer block in vision encoder
 # ---------------------------------------------------------------------------
-def _pick_vision_target_layer(vision_model: nn.Module) -> nn.Module:
+def _pick_vision_target_layer(
+    vision_model: nn.Module,
+    use_local: bool = False,
+    verbose: bool = True,
+) -> nn.Module:
     """
     Best-effort: pick the last transformer block in the vision encoder.
-    Works for many HF vision backbones (encoder.layers / layers / blocks).
+    Works for many HF vision backbones including Mllama.
+
+    Args:
+        use_local: If True, prefer local/patch transformer (Mllama: transformer.layers).
+                   If False, prefer global transformer (Mllama: global_transformer.layers).
     """
-    for path in [
-        ("encoder", "layers"),
-        ("layers",),
-        ("blocks",),
-        ("model", "layers"),
-        ("vision_model", "encoder", "layers"),
-    ]:
+    # Priority order depends on use_local
+    if use_local:
+        paths = [
+            ("transformer", "layers"),       # Mllama local (32 layers)
+            ("global_transformer", "layers"),
+            ("encoder", "layers"),
+            ("layers",),
+            ("blocks",),
+        ]
+    else:
+        paths = [
+            ("global_transformer", "layers"),  # Mllama global (8 layers)
+            ("transformer", "layers"),
+            ("encoder", "layers"),
+            ("layers",),
+            ("blocks",),
+        ]
+
+    for path in paths:
         m = vision_model
         ok = True
         for name in path:
@@ -65,11 +85,16 @@ def _pick_vision_target_layer(vision_model: nn.Module) -> nn.Module:
                 ok = False
                 break
         if ok and isinstance(m, (nn.ModuleList, list)) and len(m) > 0:
-            return m[-1]
+            layer = m[-1]
+            if verbose:
+                print(f"[ViT] Selected layer via path {path}: {type(layer).__name__} (len={len(m)})")
+            return layer
 
     # fallback: last child module with parameters
     for mod in reversed(list(vision_model.modules())):
         if isinstance(mod, nn.Module) and any(p.requires_grad for p in mod.parameters(recurse=False)):
+            if verbose:
+                print(f"[ViT] Fallback layer: {type(mod).__name__}")
             return mod
 
     raise ValueError("Could not find a suitable target layer in vision_model.")
@@ -141,7 +166,7 @@ class TokenGradCAM:
         elif act.dim() == 4:
             # conv-like: (B, C, H, W)
             weights = grad.mean(dim=(2, 3), keepdim=True)
-            cam = torch.relu((weights * act).sum(dim=1))
+            cam = (weights * act).sum(dim=1).abs()  # abs instead of relu
             return cam[0].float()
         else:
             raise RuntimeError(f"Unexpected activation shape: {act.shape}")
@@ -157,9 +182,10 @@ class TokenGradCAM:
         else:
             tok_, g_, S_use = tok, g, S
 
-        # Grad-CAM weights
+        # Grad-CAM weights (use abs instead of ReLU for better ViT compatibility)
         weights = g_.mean(dim=1)  # (B, D)
-        cam_tok = torch.relu((tok_ * weights[:, None, :]).sum(dim=-1))  # (B, S_use)
+        weighted_sum = (tok_ * weights[:, None, :]).sum(dim=-1)  # (B, S_use)
+        cam_tok = weighted_sum.abs()  # abs works better than ReLU for deep layers
 
         # Reshape to grid
         grid = int(math.sqrt(S_use))
@@ -215,6 +241,31 @@ def _resolve_real_image_path(dataset: VLM_Dataset, note_hash: str, base_img_dir:
     return real_path
 
 
+def _load_radiology_report_for_metadata(dataset: VLM_Dataset, note_hash: str, base_rr_dir: str) -> str | None:
+    """Load radiology report text for metadata (regardless of --use_rad_report flag)."""
+    try:
+        all_img_data = dataset.hash2meta[note_hash]["metadata_filtered"]
+        best = dataset.Decision_tree.select_best_cxr(all_img_data)
+        if best is None:
+            return None
+
+        # Extract path parts for radiology report
+        selected_img_path = best[1]
+        path_parts = selected_img_path.split("/")[:3]
+        if len(path_parts) != 3:
+            return None
+
+        rr_relative_path = "/".join(path_parts) + ".txt"
+        rr_full_path = os.path.join(base_rr_dir, rr_relative_path)
+
+        if os.path.exists(rr_full_path):
+            with open(rr_full_path, "r", encoding="utf-8") as f:
+                return f.read().replace("\n", " ").strip()
+        return None
+    except Exception:
+        return None
+
+
 def _normalize_map(
     x: np.ndarray,
     clip_low: float = 1.0,
@@ -243,10 +294,9 @@ def _normalize_map(
     return x.astype(np.float32)
 
 
-def _save_heatmap_triplet(
+def _create_overlay_array(
     image_rgb: Image.Image,
     heat: np.ndarray,
-    out_prefix: str,
     alpha: float = 0.55,
     clip_low: float = 1.0,
     clip_high: float = 99.0,
@@ -254,8 +304,8 @@ def _save_heatmap_triplet(
     log_scale: bool = False,
     cmap_name: str = "turbo",
     overlay_beta: float = 1.5,
-) -> None:
-    """Save original, heatmap, and overlay images."""
+) -> np.ndarray:
+    """Create overlay image as numpy array [0,1] RGB."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -267,25 +317,37 @@ def _save_heatmap_triplet(
     heat_t = F.interpolate(heat_t, size=(H, W), mode="bilinear", align_corners=False)
     heat_r = _normalize_map(heat_t[0, 0].cpu().numpy(), clip_low, clip_high, gamma, log_scale)
 
-    image_rgb.save(f"{out_prefix}_orig.png")
-
-    plt.figure(figsize=(6, 6))
-    plt.imshow(heat_r, cmap=cmap_name)
-    plt.axis("off")
-    plt.tight_layout()
-    plt.savefig(f"{out_prefix}_saliency.png", dpi=200, bbox_inches="tight", pad_inches=0)
-    plt.close()
-
     cmap = plt.get_cmap(cmap_name)
     colored = cmap(heat_r)[..., :3]
     a = np.clip(alpha * (heat_r ** overlay_beta), 0.0, 1.0)
     overlay = np.clip(img * (1.0 - a[..., None]) + colored * a[..., None], 0, 1)
 
-    plt.figure(figsize=(6, 6))
-    plt.imshow(overlay)
-    plt.axis("off")
+    return overlay
+
+
+def _save_combined_horizontal(
+    images: list,
+    labels: list,
+    out_path: str,
+    dpi: int = 150,
+) -> None:
+    """Save multiple images as a single horizontal strip with labels."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    n = len(images)
+    fig, axes = plt.subplots(1, n, figsize=(4 * n, 4))
+    if n == 1:
+        axes = [axes]
+
+    for ax, img, label in zip(axes, images, labels):
+        ax.imshow(img)
+        ax.set_title(label, fontsize=10, fontweight='bold')
+        ax.axis("off")
+
     plt.tight_layout()
-    plt.savefig(f"{out_prefix}_overlay.png", dpi=200, bbox_inches="tight", pad_inches=0)
+    plt.savefig(out_path, dpi=dpi, bbox_inches="tight", pad_inches=0.1)
     plt.close()
 
 
@@ -343,25 +405,45 @@ def _gradcam_saliency(
     batch: Dict[str, torch.Tensor],
     target_class: int,
     target_layer_name: str,
+    verbose: bool = True,
 ) -> np.ndarray:
     """
     Grad-CAM saliency map.
 
     Args:
-        target_layer_name: "projector" or "vit"
+        target_layer_name: "projector", "vit" (global), or "vit_local"
     """
     model.zero_grad(set_to_none=True)
     torch.set_grad_enabled(True)
 
     if target_layer_name == "vit":
-        target_layer = _pick_vision_target_layer(model.base_model.vision_model)
+        target_layer = _pick_vision_target_layer(
+            model.base_model.vision_model, use_local=False, verbose=verbose
+        )
+    elif target_layer_name == "vit_local":
+        target_layer = _pick_vision_target_layer(
+            model.base_model.vision_model, use_local=True, verbose=verbose
+        )
     else:  # projector
         target_layer = model.base_model.multi_modal_projector
+        if verbose:
+            print(f"[Projector] Using: {type(target_layer).__name__}")
 
     with TokenGradCAM(target_layer) as cam:
         out = model(**batch)
         score = out["logits"][:, target_class].sum()
         cam_grid = cam.compute(score)
+
+        # Debug: check activation/gradient stats
+        if verbose and cam.activations is not None and cam.gradients is not None:
+            act = cam.activations
+            grad = cam.gradients
+            print(f"[GradCAM] Activation shape: {tuple(act.shape)}, "
+                  f"mean={float(act.abs().mean()):.6f}, max={float(act.abs().max()):.6f}")
+            print(f"[GradCAM] Gradient shape: {tuple(grad.shape)}, "
+                  f"mean={float(grad.abs().mean()):.6f}, max={float(grad.abs().max()):.6f}")
+            print(f"[GradCAM] CAM grid shape: {tuple(cam_grid.shape)}, "
+                  f"min={float(cam_grid.min()):.6f}, max={float(cam_grid.max()):.6f}")
 
     return cam_grid.detach().cpu().numpy().astype(np.float32)
 
@@ -385,14 +467,19 @@ def main() -> None:
                    help="Path to saved_images folder (with train/dev/test subdirs)")
 
     # Core options with defaults
-    p.add_argument("--target_layer", type=str, default="projector", choices=["projector", "vit"],
-                   help="Where to extract Grad-CAM: 'projector' or 'vit'")
-    p.add_argument("--index", type=int, default=-1021,
+    p.add_argument("--target_layer", type=str, default="all",
+                   choices=["all", "projector", "vit", "vit_local"],
+                   help="Which layer(s) to visualize: 'all' for combined image, or single layer")
+    p.add_argument("--index", type=int, default=1021,
                    help="Sample index (-1 for random)")
     p.add_argument("--target_class", type=int, default=1, choices=[0, 1],
                    help="0=alive, 1=death")
     p.add_argument("--output_dir", type=str, default="./attention_outputs")
     p.add_argument("--device", type=str, default="cuda")
+
+    # Modality options (match your trained model)
+    p.add_argument("--use_discharge_note", action="store_true", help="Use discharge note (for dn, dn+img, dn+rr models)")
+    p.add_argument("--use_rad_report", action="store_true", help="Use radiology report (for rr, dn+rr models)")
 
     # Paths with repo-relative defaults
     p.add_argument("--metadata_path", type=str,
@@ -401,21 +488,22 @@ def main() -> None:
                    default=str(repo_root / "dataset" / "test_summarization" / "total_output.jsonl"))
     p.add_argument("--test_metadata_image_path", type=str,
                    default=str(repo_root / "dataset" / "test_summarization" / "full-test-indent-images.json"))
-    p.add_argument("--base_rr_dir", type=str, default=str(repo_root))
+    p.add_argument("--base_rr_dir", type=str, 
+                   default=str(repo_root / "physionet.org" / "files" / "mimic-cxr" / "2.1.0" / "files"))
 
     # Model/data
     p.add_argument("--model_name_or_path", type=str, default="meta-llama/Llama-3.2-11B-Vision-Instruct")
     p.add_argument("--summary_type", type=str, default="plain")
-    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--seed", type=int, default=11)
 
     # Visualization
-    p.add_argument("--alpha", type=float, default=0.55)
+    p.add_argument("--alpha", type=float, default=0.5)
     p.add_argument("--gamma", type=float, default=0.7)
-    p.add_argument("--clip_low", type=float, default=1.0)
-    p.add_argument("--clip_high", type=float, default=99.0)
+    p.add_argument("--clip_low", type=float, default=10.0)
+    p.add_argument("--clip_high", type=float, default=99.5)
     p.add_argument("--log_scale", action="store_true")
     p.add_argument("--cmap", type=str, default="turbo")
-    p.add_argument("--overlay_beta", type=float, default=1.5)
+    p.add_argument("--overlay_beta", type=float, default=2.0)
 
     args = p.parse_args()
     _set_seed(args.seed)
@@ -444,6 +532,9 @@ def main() -> None:
     rargs = RepoArgs(
         model_name_or_path=args.model_name_or_path,
         checkpoint_dir=str(Path(args.checkpoint_path).parent),
+        use_cxr_image=True,  # Always True for visualization (need image for heatmap)
+        use_rad_report=args.use_rad_report,
+        use_discharge_note=args.use_discharge_note,
         summary_type=args.summary_type,
         base_img_dir=args.base_img_dir,
         base_rr_dir=args.base_rr_dir,
@@ -452,9 +543,9 @@ def main() -> None:
         test_metadata_image_path=args.test_metadata_image_path,
     )
 
-    # Load model
-    model, processor = load_model(rargs, model_id=rargs.model_name_or_path, inference=False)
-    _load_checkpoint_into_model(model, args.checkpoint_path)
+    # Load model with proper checkpoint loading (inference=True)
+    model, processor = load_model(rargs, model_id=rargs.model_name_or_path, inference=True)
+    # Checkpoint is loaded inside load_model when inference=True
 
     try:
         model.to(device)
@@ -468,26 +559,31 @@ def main() -> None:
     test_data = _load_jsonl(args.test_data_path, args.summary_type)
     dataset = VLM_Dataset(
         rargs, test_data, args.test_metadata_image_path,
-        use_cxr_image=True, use_rad_report=False, use_discharge_note=False, shuffle=False,
+        use_cxr_image=True,  # Always need image for visualization
+        use_rad_report=args.use_rad_report,
+        use_discharge_note=args.use_discharge_note,
+        shuffle=False,
     )
 
     idx = random.randrange(len(dataset)) if args.index < 0 else args.index
     ex = dataset[idx]
     sample_id = ex["id"]
 
-    # Load image
+    # Get image tensor from dataset (same as inference.py uses via collator)
     img_path = _resolve_real_image_path(dataset, sample_id, args.base_img_dir)
-    pil_img = Image.open(img_path).convert("RGB")
+    pil_img = Image.open(img_path).convert("RGB")  # For visualization only
 
-    # Prepare batch
+    # Prepare batch using dataset's pre-processed tensor image (same as custom_data_collator)
     text = processor.apply_chat_template(ex["chat_template"], tokenize=False)
-    batch = processor(text=[text], images=[[pil_img]], return_tensors="pt", padding=True, truncation=False)
+    # Use tensor image from dataset, not PIL - this matches inference.py behavior
+    tensor_img = ex["image"][0] if ex.get("image") else None
+    if tensor_img is not None:
+        batch = processor(text=[text], images=[[tensor_img]], return_tensors="pt", padding=True, truncation=False)
+    else:
+        batch = processor(text=[text], return_tensors="pt", padding=True, truncation=False)
     batch = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
 
-    # Compute Grad-CAM
-    heat_raw = _gradcam_saliency(model, batch, args.target_class, args.target_layer)
-
-    # Get predictions
+    # Get predictions first
     with torch.no_grad():
         logits = _predict_logits(model, batch)[0].float().cpu().numpy()
         probs = F.softmax(torch.tensor(logits), dim=-1).numpy()
@@ -500,14 +596,43 @@ def main() -> None:
     else:
         pil_viz = pil_img
 
-    # Save outputs
-    out_prefix = os.path.join(args.output_dir, f"test_idx{idx}_id{sample_id}_t{args.target_class}_{args.target_layer}")
-    _save_heatmap_triplet(
-        pil_viz, heat_raw, out_prefix,
-        alpha=args.alpha, clip_low=args.clip_low, clip_high=args.clip_high,
-        gamma=args.gamma, log_scale=args.log_scale, cmap_name=args.cmap, overlay_beta=args.overlay_beta,
-    )
+    # Original image as numpy array
+    orig_arr = np.array(pil_viz).astype(np.float32) / 255.0
 
+    # Determine which layers to compute
+    if args.target_layer == "all":
+        target_layers = ["projector", "vit", "vit_local"]
+        layer_labels = ["Projector", "ViT (global)", "ViT (local)"]
+    else:
+        target_layers = [args.target_layer]
+        layer_labels = [args.target_layer]
+
+    # Compute Grad-CAM for target layers
+    overlays = []
+    for layer_name in target_layers:
+        print(f"[INFO] Computing Grad-CAM for {layer_name}...")
+        heat_raw = _gradcam_saliency(model, batch, args.target_class, layer_name, verbose=False)
+        overlay = _create_overlay_array(
+            pil_viz, heat_raw,
+            alpha=args.alpha, clip_low=args.clip_low, clip_high=args.clip_high,
+            gamma=args.gamma, log_scale=args.log_scale, cmap_name=args.cmap, overlay_beta=args.overlay_beta,
+        )
+        overlays.append(overlay)
+        # Free GPU memory between computations
+        del heat_raw
+        model.zero_grad(set_to_none=True)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    # Combine: Original + overlays (horizontal)
+    images = [orig_arr] + overlays
+    labels = ["Original"] + layer_labels
+
+    suffix = "combined" if args.target_layer == "all" else args.target_layer
+    out_path = os.path.join(args.output_dir, f"test_idx{idx}_id{sample_id}_t{args.target_class}_{suffix}.png")
+    _save_combined_horizontal(images, labels, out_path)
+
+    # Save metadata
     meta = {
         "idx": idx,
         "id": sample_id,
@@ -518,11 +643,17 @@ def main() -> None:
         "probs": probs.tolist(),
         "logits": logits.tolist(),
         "image_path": img_path,
+        "use_discharge_note": args.use_discharge_note,
+        "use_rad_report": args.use_rad_report,
+        # Include text content for reference (always loaded for metadata)
+        "discharge_note": ex.get("text"),  # From dataset (uses summary_type)
+        "radiology_report": _load_radiology_report_for_metadata(dataset, sample_id, args.base_rr_dir),
     }
-    with open(f"{out_prefix}_meta.json", "w", encoding="utf-8") as f:
+    meta_path = os.path.join(args.output_dir, f"test_idx{idx}_id{sample_id}_t{args.target_class}_{suffix}_meta.json")
+    with open(meta_path, "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2, ensure_ascii=False)
 
-    print(f"[OK] Saved: {out_prefix}")
+    print(f"[OK] Saved: {out_path}")
 
 
 if __name__ == "__main__":

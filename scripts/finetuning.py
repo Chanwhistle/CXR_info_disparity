@@ -14,6 +14,11 @@ warnings.filterwarnings(
     message="Could not find a config file in", 
     category=UserWarning
 )
+warnings.filterwarnings(
+    "ignore", 
+    message="None of the inputs have requires_grad=True",
+    category=UserWarning
+)
 
 def train(args):
     train_data = load_data(args.train_data_path, args.summary_type)
@@ -57,6 +62,7 @@ def train(args):
         logging_dir="./logs",
         eval_strategy="epoch",
         save_strategy="epoch",
+        max_grad_norm=1.0,   
         optim="adamw_hf",
         lr_scheduler_type="polynomial",
         warmup_ratio=0.1,
