@@ -131,9 +131,6 @@ def load_data(path, summary_type):
         
 def compute_metrics_auroc(eval_pred):
     
-    print("predictions type/shape:", type(eval_pred.predictions), getattr(eval_pred.predictions, "shape", None))
-    print("label_ids type/shape:", type(eval_pred.label_ids), getattr(eval_pred.label_ids, "shape", None))
-
     logits, labels = eval_pred
     if isinstance(logits, (tuple, list)):
         logits = logits[0]

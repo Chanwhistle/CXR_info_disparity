@@ -81,7 +81,9 @@ class LlamaMortalityClassificationModel(nn.Module):
             for param in self.base_model.multi_modal_projector.parameters():
                 param.requires_grad = False
         else:
-            print("Train vision model with LoRA")
+            # Only print training message if not in inference mode
+            if not hasattr(self.args, 'inference') or not self.args.inference:
+                print("Train vision model with LoRA")
             self.base_model.vision_model.add_adapter(lora_config, adapter_name="vision_model_adapter")
             self.base_model.vision_model.set_adapter("vision_model_adapter")
 
@@ -209,14 +211,22 @@ def load_model(
             print(f"Loaded language model LoRA adapter...")
 
             if args.use_cxr_image:
-                vm_adapter_state = map_adapter_keys(torch.load(checkpoint_path / "vm_adapter.bin", map_location="cpu", weights_only=False), "vision_model_adapter")
-                current_state_dict = model.base_model.vision_model.state_dict()
-                load_adapter(current_state_dict, vm_adapter_state)
-                model.base_model.vision_model.load_state_dict(current_state_dict, strict=False)
-                print(f"Loaded vision model LoRA adapter...")
+                vm_adapter_path = checkpoint_path / "vm_adapter.bin"
+                if vm_adapter_path.exists():
+                    vm_adapter_state = map_adapter_keys(torch.load(vm_adapter_path, map_location="cpu", weights_only=False), "vision_model_adapter")
+                    current_state_dict = model.base_model.vision_model.state_dict()
+                    load_adapter(current_state_dict, vm_adapter_state)
+                    model.base_model.vision_model.load_state_dict(current_state_dict, strict=False)
+                    print(f"Loaded vision model LoRA adapter...")
+                else:
+                    print(f"Vision model adapter not found at {vm_adapter_path}, skipping...")
 
-                multi_modal_projector_state = torch.load(checkpoint_path / "multi_modal_projector.bin", map_location="cpu", weights_only=True)
-                model.base_model.multi_modal_projector.load_state_dict(multi_modal_projector_state)
-                print(f"Loaded multimodal projector...")
+                multi_modal_projector_path = checkpoint_path / "multi_modal_projector.bin"
+                if multi_modal_projector_path.exists():
+                    multi_modal_projector_state = torch.load(multi_modal_projector_path, map_location="cpu", weights_only=True)
+                    model.base_model.multi_modal_projector.load_state_dict(multi_modal_projector_state)
+                    print(f"Loaded multimodal projector...")
+                else:
+                    print(f"Multimodal projector not found at {multi_modal_projector_path}, skipping...")
             
         return model, processor
