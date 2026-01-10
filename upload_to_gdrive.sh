@@ -87,58 +87,6 @@ echo "  로컬 경로: $(pwd)"
 echo "  원격 경로: $REMOTE_PATH"
 echo ""
 
-# .gitignore 기반 필터 파일 생성
-FILTER_FILE="/tmp/rclone-filters.txt"
-cat > "$FILTER_FILE" << 'EOF'
-# .gitignore 기반 필터
-- __pycache__/
-- *.pyc
-- *.pyo
-- *.pyd
-- .Python
-- env/
-- venv/
-- ENV/
-- *.egg-info/
-- .pytest_cache/
-- .ipynb_checkpoints/
-- .DS_Store
-- *.log
-- .vscode/
-- .idea/
-- *.swp
-- *.swo
-- *~
-- wandb/
-- analyze/
-- inference_result/
-- dataset/
-- cache_images/
-- physionet.org/
-- saved_images/
-- attention_outputs/
-- trained_models/
-- *.bin
-- *.pt
-- *.pth
-- former/
-- __pycache__
-EOF
-
-# .dockerignore의 내용도 추가 (데이터 파일 제외)
-echo "" >> "$FILTER_FILE"
-echo "# .dockerignore 기반 필터" >> "$FILTER_FILE"
-echo "- dataset/" >> "$FILTER_FILE"
-echo "- physionet.org/" >> "$FILTER_FILE"
-echo "- saved_images/" >> "$FILTER_FILE"
-echo "- trained_models/" >> "$FILTER_FILE"
-echo "- cache_images/" >> "$FILTER_FILE"
-echo "- attention_outputs/" >> "$FILTER_FILE"
-echo "- inference_result/" >> "$FILTER_FILE"
-
-echo -e "${YELLOW}필터 규칙이 적용됩니다 (대용량 데이터 폴더 제외).${NC}"
-echo ""
-
 # 확인
 read -p "업로드를 시작하시겠습니까? (y/N): " CONFIRM
 if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then

@@ -10,7 +10,7 @@ RR_DIR="../physionet.org/files/mimic-cxr/2.1.0/files"
 for BATCH_SIZE in 2; do
   for SUMMARY_TYPE in plain; do
     for LR in 5e-5; do
-      for COUNT in 2 3 4 5; do
+      for COUNT in 3 6 7; do
         OUTPUT_PATH="${OUTPUT_BASE}/dn+rr/${COUNT}"
         python finetuning.py \
             --model_name_or_path ${MODEL_NAME} \
@@ -26,16 +26,16 @@ for BATCH_SIZE in 2; do
             --use_discharge_note \
             --use_rad_report \
                 
-        python inference.py \
-            --model_name_or_path ${MODEL_NAME} \
-            --output_path ${OUTPUT_PATH} \
-            --checkpoint_dir ${OUTPUT_PATH} \
-            --summary_type ${SUMMARY_TYPE} \
-            --batch_size 1 \
-            --base_img_dir "${CXR_DIR}" \
-            --base_rr_dir "${RR_DIR}" \
-            --use_discharge_note \
-            --use_rad_report \
+        # python inference.py \
+        #     --model_name_or_path ${MODEL_NAME} \
+        #     --output_path ${OUTPUT_PATH} \
+        #     --checkpoint_dir ${OUTPUT_PATH} \
+        #     --summary_type ${SUMMARY_TYPE} \
+        #     --batch_size 1 \
+        #     --base_img_dir "${CXR_DIR}" \
+        #     --base_rr_dir "${RR_DIR}" \
+        #     --use_discharge_note \
+        #     --use_rad_report \
 
       done    
     done    
@@ -77,3 +77,24 @@ done
 #     done    
 #   done   
 # done   
+
+
+for BATCH_SIZE in 1; do
+    for COUNT in 1 2 3 4 5 6 7; do
+        for SUMMARY_TYPE in plain; do
+
+            OUTPUT_PATH="${OUTPUT_BASE}/dn+rr/${COUNT}"            
+            python inference.py \
+                --model_name_or_path "${MODEL_NAME}" \
+                --output_path "${OUTPUT_PATH}" \
+                --checkpoint_dir "${OUTPUT_PATH}" \
+                --summary_type "${SUMMARY_TYPE}" \
+                --batch_size ${BATCH_SIZE} \
+                --base_img_dir "${CXR_DIR}" \
+                --base_rr_dir "${RR_DIR}" \
+                --use_discharge_note \
+                --use_rad_report \
+                
+        done   
+    done   
+done   
