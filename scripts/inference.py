@@ -56,9 +56,9 @@ def test(args):
     model.eval()
     model.config.use_cache = True
     
-    dev_loader = prepare_loader(args.summary_type, args, "dev", processor)
+    # dev_loader = prepare_loader(args.summary_type, args, "dev", processor)
     test_loader = prepare_loader(args.summary_type, args, "test", processor)
-    inference(model, device, dev_loader, args, set_type="dev")
+    # inference(model, device, dev_loader, args, set_type="dev")
     inference(model, device, test_loader, args, set_type="test")
 
 if __name__ == "__main__":

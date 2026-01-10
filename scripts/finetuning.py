@@ -54,7 +54,7 @@ def train(args):
     model, processor = load_model(
         args,
         model_id=args.model_name_or_path, 
-        inference=True
+        inference=False
         )    
     model.config.use_cache = False
 

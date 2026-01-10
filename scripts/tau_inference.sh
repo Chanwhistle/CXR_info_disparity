@@ -1,5 +1,5 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=5
 # 모델과 데이터 경로 설정
 MODEL_NAME="meta-llama/Llama-3.2-11B-Vision-Instruct"
 OUTPUT_BASE="../trained_models"
@@ -48,7 +48,7 @@ RR_DIR="../physionet.org/files/mimic-cxr/2.1.0/files"
 
 
 for BATCH_SIZE in 1; do
-    for COUNT in 2; do
+    for COUNT in 10; do
         for SUMMARY_TYPE in plain; do
 
             OUTPUT_PATH="${OUTPUT_BASE}/dn+img/${COUNT}"            

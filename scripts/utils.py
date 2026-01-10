@@ -203,7 +203,7 @@ def compute_ece(labels, pos_probs, n_bins=10):
     
     return float(ece)
 
-def _bootstrap_ci_auc_pr(labels, pos_probs, n_boot=10000, seed=42, stratified=True, alpha=0.05):
+def _bootstrap_ci_auc_pr(labels, pos_probs, n_boot=2000, seed=42, stratified=True, alpha=0.05):
     labels = np.asarray(labels).astype(int)
     pos_probs = np.asarray(pos_probs).astype(float)
 
@@ -253,7 +253,7 @@ def _bootstrap_ci_auc_pr(labels, pos_probs, n_boot=10000, seed=42, stratified=Tr
 
 def log_result(args, labels, probs, output_path, set_type,
                compute_ci=True, ci_method="bootstrap",
-               n_boot=10000, seed=42):
+               n_boot=2000, seed=42):
     os.makedirs(output_path, exist_ok=True)
 
     labels = np.asarray(labels).astype(int)
