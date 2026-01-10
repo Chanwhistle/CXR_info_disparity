@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  cxr-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cxr-info-disparity
+    volumes:
+      # Mount project directory for development
+      - .:/app
+      # Mount data directories (adjust paths as needed)
+      # - ./dataset:/app/dataset:ro
+      # - ./physionet.org:/app/physionet.org:ro
+      # - ./trained_models:/app/trained_models
+      # - ./saved_images:/app/saved_images
+    environment:
+      - PYTHONPATH=/app
+      - TASK_NAME=${TASK_NAME:-out_hospital_mortality_30}
+      - NOTE_PATH=${NOTE_PATH:-/app/data/discharge.csv}
+    ports:
+      - "8888:8888"  # For Jupyter notebook
+    stdin_open: true
+    tty: true
+    command: /bin/bash
+
+  # Optional: Jupyter service
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cxr-jupyter
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONPATH=/app
+    ports:
+      - "8888:8888"
+    command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=''

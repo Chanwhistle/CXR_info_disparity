@@ -1,0 +1,88 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+
+# Data directories (exclude from Docker image)
+dataset/
+physionet.org/
+saved_images/
+trained_models/
+cache_images/
+attention_outputs/
+inference_result/
+
+# Model files (too large for Docker)
+*.pt
+*.pth
+*.bin
+*.ckpt
+*.h5
+*.pkl
+
+# Logs
+*.log
+logs/
+wandb/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation
+*.md
+!README.md
+
+# Scripts and configs that might contain secrets
+*.key
+*.pem
+.env
+.env.local

@@ -11,10 +11,40 @@ wandb/
 analyze/
 inference_result/
 dataset/
+# JSON files (but keep config files if needed)
 *.json
+!package.json
+!tsconfig.json
+# Text files (but keep important config files)
 *.txt
+!requirements.txt
+!LICENSE
 cache_images/
 physionet.org/
 saved_images/
 attention_outputs/
 trained_models/
+
+# Docker
+# Keep Docker files in git
+# .dockerignore should be in git
+
+# Python
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+.pytest_cache/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~

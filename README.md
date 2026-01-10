@@ -49,6 +49,35 @@ We strongly recommend to use Python version 3.9 or higher.
 <br>The example codes are tested on Ubuntu 22.04 (python v3.10.12) and MacOS v13.5.2 (python v3.9.6).
 <br>pandas and tqdm are required. To install these: `pip install -r requirements.txt`
 
+#### Docker Support:
+This repository includes Docker configuration for easy environment setup.
+
+**Using Docker:**
+```bash
+# Build the Docker image
+docker build -t cxr-info-disparity .
+
+# Run with docker-compose (recommended)
+docker-compose up -d
+docker-compose exec cxr-app bash
+
+# Or run directly
+docker run -it --rm -v $(pwd):/app cxr-info-disparity bash
+```
+
+**Using Docker Compose:**
+```bash
+# Start services
+docker-compose up -d
+
+# Access the container
+docker-compose exec cxr-app bash
+
+# For Jupyter notebook
+docker-compose up jupyter
+# Then access at http://localhost:8888
+```
+
 Please pay attention to the message (stdout) at the end of processing run, as it will tell the integrity of the created data.
 Note that the integrity does not check the order of the instances in datasets.
 
