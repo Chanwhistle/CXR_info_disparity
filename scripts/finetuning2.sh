@@ -1,5 +1,5 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=1
 
 # 모델과 데이터 경로 설정
 MODEL_NAME="meta-llama/Llama-3.2-11B-Vision-Instruct"
@@ -45,8 +45,8 @@ RR_DIR="../physionet.org/files/mimic-cxr/2.1.0/files"
 
 for BATCH_SIZE in 2; do
   for SUMMARY_TYPE in plain; do
-    for LR in 4e-5; do
-      for COUNT in 10; do
+    for LR in 2e-5; do
+      for COUNT in 3; do
         OUTPUT_PATH="${OUTPUT_BASE}/dn+img/${COUNT}"
         python finetuning.py \
             --model_name_or_path ${MODEL_NAME} \
