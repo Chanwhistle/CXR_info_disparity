@@ -3,6 +3,8 @@
 # CPU 전용 SVM 학습 스크립트
 export OMP_NUM_THREADS=8
 export MKL_NUM_THREADS=8
+CXR_DIR="../saved_images"
+RR_DIR="../physionet.org/files/mimic-cxr/2.1.0/files"
 
 # 출력 경로 설정
 OUTPUT_BASE="../finetuned_model_new"
@@ -35,8 +37,10 @@ for SUMMARY_TYPE in plain plain_remove_cxr; do
   echo "========================================"
   
   python svm.py \
-      --output_path "${OUTPUT_PATH}" \
-      --summary_type "${SUMMARY_TYPE}"
+    --output_path "${OUTPUT_PATH}" \
+    --summary_type "${SUMMARY_TYPE}" \
+    --base_img_dir "${CXR_DIR}" \
+    --base_rr_dir "${RR_DIR}" \
   
   # 결과 추출
   if [ -f "${OUTPUT_PATH}/metrics.txt" ]; then
@@ -60,9 +64,11 @@ for SUMMARY_TYPE in plain plain_remove_cxr; do
   echo "========================================"
   
   python svm.py \
-      --output_path "${OUTPUT_PATH}" \
-      --summary_type "${SUMMARY_TYPE}" \
-      --use_rad_report
+    --output_path "${OUTPUT_PATH}" \
+    --summary_type "${SUMMARY_TYPE}" \
+    --use_rad_report \
+    --base_img_dir "${CXR_DIR}" \
+    --base_rr_dir "${RR_DIR}" \
   
   # 결과 추출
   if [ -f "${OUTPUT_PATH}/metrics.txt" ]; then
@@ -90,9 +96,11 @@ echo "  Input: DN + Personal Information"
 echo "========================================"
 
 python svm.py \
-    --output_path "${OUTPUT_PATH}" \
-    --summary_type "${SUMMARY_TYPE}" \
-    --use_pi
+  --output_path "${OUTPUT_PATH}" \
+  --summary_type "${SUMMARY_TYPE}" \
+  --use_pi \
+  --base_img_dir "${CXR_DIR}" \
+  --base_rr_dir "${RR_DIR}" \
 
 # 결과 추출
 if [ -f "${OUTPUT_PATH}/metrics.txt" ]; then
@@ -116,10 +124,12 @@ echo "  Input: DN + Radiology Report + Personal Information"
 echo "========================================"
 
 python svm.py \
-    --output_path "${OUTPUT_PATH}" \
-    --summary_type "${SUMMARY_TYPE}" \
-    --use_rad_report \
-    --use_pi
+  --output_path "${OUTPUT_PATH}" \
+  --summary_type "${SUMMARY_TYPE}" \
+  --use_rad_report \
+  --use_pi \
+  --base_img_dir "${CXR_DIR}" \
+  --base_rr_dir "${RR_DIR}" \
 
 # 결과 추출
 if [ -f "${OUTPUT_PATH}/metrics.txt" ]; then

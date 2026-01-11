@@ -27,7 +27,7 @@ def train(args):
     print(f"TOTAL EVAL  DATASET : {len(eval_data)}")
 
     if args.debug:
-        train_data = train_data[:20]
+        train_data = train_data[:10]
         eval_data = eval_data[:5]
 
     train_dataset = VLM_Dataset(
@@ -99,7 +99,8 @@ def train(args):
         data_collator=custom_data_collator(processor, use_cxr_image=args.use_cxr_image, summary_type=args.summary_type),
         tokenizer=processor.tokenizer,
         compute_metrics=compute_metrics_auroc,
-        use_cxr_image=args.use_cxr_image
+        use_cxr_image=args.use_cxr_image,
+        head_lr=getattr(args, 'head_lr', None)  # head_lr 전달
     )
 
     trainer.add_callback(
@@ -117,6 +118,8 @@ if __name__ == "__main__":
     set_seed(random.randint(1, 10000))
     print(f"Base model           : {args.model_name_or_path}")
     print(f"Base learning rate   : {args.lr}")
+    if hasattr(args, 'head_lr') and args.head_lr is not None:
+        print(f"Head learning rate   : {args.head_lr}")
     print(f"Batch size           : {args.batch_size * args.gradient_accumulation_steps * torch.cuda.device_count()}")
     print(f"Use CXR image        : {args.use_cxr_image}")
     print(f"Use Radiology note   : {args.use_rad_report}")

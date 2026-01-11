@@ -6,7 +6,7 @@ import numpy as np
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics import roc_auc_score, accuracy_score, precision_recall_fscore_support
+from sklearn.metrics import roc_auc_score, accuracy_score, precision_recall_fscore_support, average_precision_score
 from torch.utils.data import DataLoader
 from utils import get_args, load_data
 import warnings
@@ -40,6 +40,17 @@ def extract_text_from_dataset(dataset):
         
         # 텍스트 추출 (discharge note가 있으면 사용, 없으면 빈 문자열)
         text = sample.get("text", "") or ""
+        
+        # Personal information 추가 (race, age)
+        pi = sample.get("personal_information", {})
+        if pi:
+            pi_text = ""
+            if pi.get("race"):
+                pi_text += f"race: {pi['race']} "
+            if pi.get("age"):
+                pi_text += f"age: {pi['age']} "
+            if pi_text:
+                text = f"{pi_text}{text}"
         
         # Radiology report도 사용하고 싶다면 결합
         if sample.get("rad_report"):
@@ -99,6 +110,7 @@ def compute_metrics(y_true, y_pred, y_pred_proba):
     평가 지표 계산
     """
     auroc = roc_auc_score(y_true, y_pred_proba)
+    auprc = average_precision_score(y_true, y_pred_proba)
     accuracy = accuracy_score(y_true, y_pred)
     precision, recall, f1, _ = precision_recall_fscore_support(
         y_true, y_pred, average='binary'
@@ -106,6 +118,7 @@ def compute_metrics(y_true, y_pred, y_pred_proba):
     
     return {
         'auroc': auroc,
+        'auprc': auprc,
         'accuracy': accuracy,
         'precision': precision,
         'recall': recall,
@@ -135,7 +148,7 @@ def train(args):
         data_list=train_data,
         metadata_image_path=args.train_metadata_image_path,
         use_cxr_image=False,  # SVM은 이미지 미사용
-        use_rad_report=args.use_rad_report,  # args에 따라 설정
+        use_rad_report=args.use_rad_report if hasattr(args, 'use_rad_report') else False,  # args에 따라 설정
         use_discharge_note=True,  # discharge note는 사용
         shuffle=True,
         summarize=False
@@ -146,7 +159,7 @@ def train(args):
         data_list=eval_data,
         metadata_image_path=args.dev_metadata_image_path,
         use_cxr_image=False,
-        use_rad_report=args.use_rad_report,
+        use_rad_report=args.use_rad_report if hasattr(args, 'use_rad_report') else False,
         use_discharge_note=True,
         shuffle=False,
         summarize=False
@@ -157,7 +170,7 @@ def train(args):
         data_list=test_data,
         metadata_image_path=args.test_metadata_image_path,
         use_cxr_image=False,
-        use_rad_report=args.use_rad_report,
+        use_rad_report=args.use_rad_report if hasattr(args, 'use_rad_report') else False,
         use_discharge_note=True,
         shuffle=False,
         summarize=False
@@ -208,6 +221,7 @@ def train(args):
     train_metrics = compute_metrics(y_train, y_train_pred, y_train_pred_proba)
     
     print(f"Train AUROC:     {train_metrics['auroc']:.4f}")
+    print(f"Train AUPRC:     {train_metrics['auprc']:.4f}")
     print(f"Train Accuracy:  {train_metrics['accuracy']:.4f}")
     print(f"Train Precision: {train_metrics['precision']:.4f}")
     print(f"Train Recall:    {train_metrics['recall']:.4f}")
@@ -220,6 +234,7 @@ def train(args):
     eval_metrics = compute_metrics(y_eval, y_eval_pred, y_eval_pred_proba)
     
     print(f"Eval AUROC:     {eval_metrics['auroc']:.4f}")
+    print(f"Eval AUPRC:     {eval_metrics['auprc']:.4f}")
     print(f"Eval Accuracy:  {eval_metrics['accuracy']:.4f}")
     print(f"Eval Precision: {eval_metrics['precision']:.4f}")
     print(f"Eval Recall:    {eval_metrics['recall']:.4f}")
@@ -232,6 +247,7 @@ def train(args):
     test_metrics = compute_metrics(y_test, y_test_pred, y_test_pred_proba)
     
     print(f"Test AUROC:     {test_metrics['auroc']:.4f}")
+    print(f"Test AUPRC:     {test_metrics['auprc']:.4f}")
     print(f"Test Accuracy:  {test_metrics['accuracy']:.4f}")
     print(f"Test Precision: {test_metrics['precision']:.4f}")
     print(f"Test Recall:    {test_metrics['recall']:.4f}")
@@ -274,7 +290,7 @@ def train(args):
     
     print(f"Metrics saved to: {metrics_path}")
     
-    return test_metrics['auroc']
+    return test_metrics
 
 if __name__ == "__main__":
     args = get_args()
@@ -287,11 +303,13 @@ if __name__ == "__main__":
     print(f"Kernel               : {args.kernel if hasattr(args, 'kernel') else 'linear'}")
     print(f"Summary type         : {args.summary_type}")
     print(f"Use Radiology note   : {args.use_rad_report}")
+    print(f"Use Personal Info    : {args.use_pi if hasattr(args, 'use_pi') else False}")
     print(f"Output path          : {args.output_path}")
     print("="*60)
     
-    auroc = train(args)
+    test_metrics = train(args)
     
     print("\n" + "="*60)
-    print(f"Final Test AUROC: {auroc:.4f}")
+    print(f"Final Test AUROC: {test_metrics['auroc']:.4f}")
+    print(f"Final Test AUPRC: {test_metrics['auprc']:.4f}")
     print("="*60)

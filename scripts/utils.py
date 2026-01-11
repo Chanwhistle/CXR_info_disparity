@@ -18,29 +18,145 @@ from sklearn.metrics import roc_auc_score, average_precision_score, brier_score_
 
 class AdapterOnlyTrainer(Trainer):
     def __init__(self, *args, **kwargs):
-        self.use_cxr_image = kwargs.pop('use_cxr_image')
+        # kwargs에서 꺼내되, 없으면 False (안전장치)
+        self.use_cxr_image = kwargs.pop('use_cxr_image', False)
+        self.head_lr = kwargs.pop('head_lr', None)  # head_lr 추가
         super().__init__(*args, **kwargs)
 
     def save_model(self, output_dir: Optional[str] = "None", _internal_call: bool = False):
+        """
+        학습된 모듈만 선별적으로 저장합니다.
+        """
         os.makedirs(output_dir, exist_ok=True)
         
-        print("\n")
-        if self.use_cxr_image:
+        # 모델의 args에 접근하여 모달리티 사용 여부 확인
+        args = self.model.args
+        
+        # 1. Text 사용 여부 확인 (앞서 정의한 로직)
+        use_text = (
+            getattr(args, 'use_discharge_note', False) or 
+            getattr(args, 'use_rad_report', False) or 
+            getattr(args, 'use_generated_rad_report', False)
+        )
+        
+        # 2. Image 사용 여부 확인 (init에서 받거나 model args에서 확인)
+        use_image = getattr(args, 'use_cxr_image', False)
+
+        print(f"\nSaving model to {output_dir}...")
+
+        # --- [Image Part] Vision Model & Projector ---
+        if use_image:
+            # 1) Vision Model (LoRA or Full)
             try:
-                torch.save(self.model.base_model.vision_model.get_adapter_state_dict(), os.path.join(output_dir, "vm_adapter.bin"))
-                print("Saved vision model LoRA adapter...")
+                # LoRA가 적용된 경우
+                vm_state = self.model.base_model.vision_model.get_adapter_state_dict()
+                torch.save(vm_state, os.path.join(output_dir, "vm_adapter.bin"))
+                print("Saved vision model LoRA adapter.")
             except:
+                # LoRA가 없거나 Full finetuning인 경우 (혹은 get_adapter_state_dict 실패 시)
+                # 주의: Vision Encoder 전체를 저장하면 용량이 큽니다. 필요시 state_dict 필터링 필요.
                 torch.save(self.model.base_model.vision_model.state_dict(), os.path.join(output_dir, "vision_encoder.bin"))
-                print("No vision model LoRA adapter!")
-                print("Saved vision model...")
+                print("Warning: Saved full vision model (No adapter found).")
 
+            # 2) Projector (보통 Full Fine-tuning 하므로 state_dict 저장)
             torch.save(self.model.base_model.multi_modal_projector.state_dict(), os.path.join(output_dir, "multi_modal_projector.bin"))
-            print("Saved multimodal projector...")
+            print("Saved multimodal projector.")
 
-        torch.save(self.model.base_model.language_model.get_adapter_state_dict(), os.path.join(output_dir, "lm_adapter.bin"))
-        print("Saved language model LoRA adapter...")
+        # --- [Text Part] Language Model ---
+        if use_text:
+            # Text Only 혹은 Multimodal일 때만 LM Adapter 저장
+            # Image Only일 때는 LM이 Freeze 되어 있으므로 저장할 필요 없음
+            try:
+                lm_state = self.model.base_model.language_model.get_adapter_state_dict()
+                torch.save(lm_state, os.path.join(output_dir, "lm_adapter.bin"))
+                print("Saved language model LoRA adapter.")
+            except Exception as e:
+                print(f"Skipping LM adapter save (maybe not trained?): {e}")
+
+        # --- [Classifier] ---
+        # Classifier는 항상 학습하므로 무조건 저장
         torch.save(self.model.classifier.state_dict(), os.path.join(output_dir, "classifier.bin"))
-        print("Saved classification head...")
+        print("Saved classification head.")
+    
+    def create_optimizer(self):
+        """
+        LoRA와 Projector는 기본 lr로, Classifier만 head_lr로 학습
+        head_lr이 None이면 기본 optimizer 사용
+        """
+        if self.head_lr is None:
+            # head_lr이 없으면 기본 optimizer 사용
+            return super().create_optimizer()
+        
+        # Parameter groups 분리
+        lora_projector_params = []  # LoRA + Projector (기본 lr)
+        classifier_params = []      # Classifier만 (head_lr)
+        
+        print("\n=== Trainable Parameters ===")
+        for name, param in self.model.named_parameters():
+            if not param.requires_grad:
+                continue
+            
+            if 'classifier' in name.lower():
+                classifier_params.append(param)
+            else:
+                lora_projector_params.append(param)
+        
+        # 각 그룹별 실제 파라미터 숫자(숫자 개수) 계산
+        num_lora_params = sum(p.numel() for p in lora_projector_params)
+        num_classifier_params = sum(p.numel() for p in classifier_params)
+
+        print(f"Total LoRA/Projector: {len(lora_projector_params)} tensors, {num_lora_params:,} elements")
+        print(f"Total Classifier: {len(classifier_params)} tensors, {num_classifier_params:,} elements")
+        
+        # Optimizer 설정
+        optimizer_grouped_parameters = [
+            {
+                "params": lora_projector_params,
+                "lr": self.args.learning_rate,  # 기본 LR (LoRA + Projector용)
+            },
+            {
+                "params": classifier_params,
+                "lr": self.head_lr,  # Head LR (Classifier만)
+            }
+        ]
+        
+        optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(self.args)
+        
+        # defaults를 먼저 설정 - 모든 필요한 키를 포함
+        # 1. optimizer_kwargs에 lr이 반드시 포함되도록 함
+        if "lr" not in optimizer_kwargs:
+            optimizer_kwargs["lr"] = self.args.learning_rate
+        
+        # 2. Optimizer 생성
+        optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
+        
+        # [중요] 3. 일부 Optimizer에서 defaults가 None인 경우를 대비해 직접 딕셔너리 할당
+        if not hasattr(optimizer, 'defaults') or optimizer.defaults is None:
+            optimizer.defaults = optimizer_kwargs
+
+        # [중요] 4. Trainer의 멤버 변수에 직접 할당 (Traceback 방지)
+        self.optimizer = optimizer
+        
+        return optimizer
+    
+    def create_scheduler(self, num_training_steps: int, optimizer=None):
+        """
+        optimizer가 None으로 들어올 경우 self.optimizer를 사용하도록 강제
+        """
+        # 인자로 받은 optimizer가 없으면 self.optimizer 사용
+        opt = optimizer if optimizer is not None else self.optimizer
+        
+        if opt is None:
+            # 이 시점에도 None이면 optimizer 생성이 실패한 것임
+            raise ValueError("Optimizer cannot be None when creating scheduler.")
+
+        # scheduler 생성 시점에 한 번 더 체크
+        if not hasattr(opt, 'defaults') or opt.defaults is None:
+            opt.defaults = {"lr": self.args.learning_rate}
+        
+        # super()를 호출할 때 확실히 채워진 optimizer를 전달
+        self.lr_scheduler = super().create_scheduler(num_training_steps, opt)
+        return self.lr_scheduler
 
     # def load_model(self, checkpoint_dir: str):
     #     if self.use_cxr_image:
@@ -446,6 +562,12 @@ def get_args():
         type=int, 
         default=4, 
         help="Use cxr image"
+    )
+    parser.add_argument(
+        '--head_lr', 
+        type=float, 
+        default=None, 
+        help="Learning rate for classifier only (if None, uses --lr)"
     )
     parser.add_argument(
         '--debug', 
