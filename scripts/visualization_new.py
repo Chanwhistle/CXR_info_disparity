@@ -889,15 +889,15 @@ def build_batch(processor: AutoProcessor, sample: Dict, device: torch.device) ->
     ]
 
     text = processor.apply_chat_template(messages, tokenize=False)
-    # processed = processor(text=[text], images=[[sample["image"]]], return_tensors="pt", padding=True)
-    processed = processor(
-        text=[text],
-        images=[[sample["image"]]],
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=256
-    )
+    processed = processor(text=[text], images=[[sample["image"]]], return_tensors="pt", padding=True)
+    # processed = processor(
+    #     text=[text],
+    #     images=[[sample["image"]]],
+    #     return_tensors="pt",
+    #     padding=True,
+    #     truncation=True,
+    #     max_length=512
+    # )
 
     batch = {k: (v.to(device) if isinstance(v, torch.Tensor) else v) for k, v in processed.items()}
     return batch, messages
@@ -1137,7 +1137,6 @@ def main():
         
     hard_cuda_gc(device)
     torch.cuda.empty_cache()
-
     # -----------------------
     # Stage 2: Cross (Grad*Input on cross_states)
     # -----------------------
@@ -1174,7 +1173,6 @@ def main():
     model.zero_grad(set_to_none=True)
     hard_cuda_gc(device)
 
-
     # -----------------------
     # Stage 3: Signed occlusion
     # -----------------------
@@ -1198,7 +1196,7 @@ def main():
     # -----------------------
     # Save
     # -----------------------
-    meta_title = f"{args.unique_id} | pred={pred} p1={p1:.3f} base_logit={base_logit:.3f}"
+    meta_title = f"{args.unique_id} | p1={p1:.3f} base_logit={base_logit:.3f}"
     fig_path = out_dir / f"{args.unique_id}_4panel.png"
 
     save_4panel(
