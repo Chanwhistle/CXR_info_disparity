@@ -33,11 +33,11 @@ for INDEX in "${UNIQUE_IDS[@]}"; do
   python visualization_new.py \
     --unique_id "$INDEX" \
     --checkpoint_dir ../trained_models/dn+img \
-    --out_dir ./attention_outputs_2layer \
+    --out_dir ./attention_outputs \
     --do_occlusion \
     --occ_micro_batch 8 \
     --occ_stride 2 \
-    --cross_layers 2 \
+    --cross_layers 4 \
     --vit_layers 1
 done
 

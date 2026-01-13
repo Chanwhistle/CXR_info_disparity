@@ -13,6 +13,7 @@ inference_result/
 dataset/
 # JSON files (but keep config files if needed)
 *.json
+*.png
 !package.json
 !tsconfig.json
 # Text files (but keep important config files)
