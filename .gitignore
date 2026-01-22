@@ -20,7 +20,7 @@ dataset/
 *.txt
 !requirements.txt
 !LICENSE
-cache_images/
+saved_images_2/
 physionet.org/
 saved_images/
 attention_outputs/

@@ -1,7 +1,7 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=7
 
-# Unblind
+# Example unique IDs - modify as needed
 UNIQUE_IDS=(
   0x619017ba7206648b0ac3a81690589c
   0x5f23090cdf667ac1769cb333d75775
@@ -25,20 +25,27 @@ UNIQUE_IDS=(
   0xfa9c2be6b9f98d3981ea63616bd6ef
 )
 
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 for INDEX in "${UNIQUE_IDS[@]}"; do
   echo "=================================================="
-  echo "Running 3-stage explainability for: $INDEX"
+  echo "Running 6-panel visualization for: $INDEX"
   echo "=================================================="
 
-  python visualization_new.py \
+  python vit_patch_norm_heatmap.py \
     --unique_id "$INDEX" \
+    --model_id meta-llama/Llama-3.2-11B-Vision-Instruct \
     --checkpoint_dir ../trained_models/dn+img \
-    --out_dir ./attention_outputs \
+    --out_dir ./vit_patch_norm_outputs \
+    --metadata_path ../dataset/metadata.json \
+    --metadata_image_path ../dataset/test_summarization/full-test-indent-images.json \
+    --test_data_path ../dataset/test_summarization/total_output.jsonl \
+    --base_img_dir ../saved_images \
+    --base_rr_dir ../physionet.org/files/mimic-cxr/2.1.0/files \
     --do_occlusion \
-    --occ_micro_batch 8 \
-    --occ_stride 2 \
-    --cross_layers 4 \
-    --vit_layers 1
+
 done
 
 echo "ALL JOBS FINISHED ✅"

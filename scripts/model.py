@@ -228,92 +228,94 @@ class LlamaMortalityClassificationModel(nn.Module):
             return outputs[0][len(input_ids[0]):]        
     
 def load_model(
-        args,
-        model_id : str,
-        inference=False
-    ) -> Tuple[LlamaMortalityClassificationModel, Union[PreTrainedTokenizer, AutoProcessor]]:
-        """
-        Load a fine-tuned model and its processor/tokenizer.
-        """
-        processor = AutoProcessor.from_pretrained(model_id)
-        processor.tokenizer.pad_token = "<|finetune_right_pad_id|>"
-        
-        # Base Model 로드
-        base_model = MllamaForConditionalGeneration.from_pretrained(
-            model_id,
-            torch_dtype=torch.bfloat16,
-            device_map="auto" # 추론 시 자동 할당 추천
-        )
+    args,
+    model_id: str,
+    inference: bool = False,
+    attn_implementation: Optional[str] = None,  # e.g. "eager"
+):
+    processor = AutoProcessor.from_pretrained(model_id)
+    processor.tokenizer.pad_token = "<|finetune_right_pad_id|>"
 
-        # Wrapper Model 초기화
-        model = LlamaMortalityClassificationModel(args, base_model)
-        
-        if inference:
-            # 체크포인트 디렉토리 찾기
-            if not os.path.exists(args.checkpoint_dir):
-                raise FileNotFoundError(f"Checkpoint directory not found: {args.checkpoint_dir}")
-                
-            # 디렉토리 내부의 하위 폴더(checkpoint-xxx)를 찾거나, 해당 폴더 자체를 사용
-            subdirs = [entry.path for entry in os.scandir(args.checkpoint_dir) if entry.is_dir()]
-            if subdirs:
-                checkpoint_path = Path(subdirs[0]) # 첫 번째 하위 폴더 선택 (보통 최신 or best)
-            else:
-                checkpoint_path = Path(args.checkpoint_dir) # 하위 폴더 없으면 해당 경로 사용
+    extra_kwargs = {}
+    if attn_implementation is not None:
+        extra_kwargs["attn_implementation"] = attn_implementation
 
-            print(f"\nLoading weights from {checkpoint_path}...")
+    base_model = MllamaForConditionalGeneration.from_pretrained(
+        model_id,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",   # ✅ comma
+        **extra_kwargs,
+    )
 
-            # 1. Classifier 로드 (항상 존재해야 함)
-            classifier_path = checkpoint_path / "classifier.bin"
-            if classifier_path.exists():
-                classifier_state = torch.load(classifier_path, map_location="cpu", weights_only=True)
-                model.classifier.load_state_dict(classifier_state, strict=False)
-                print("Loaded classifier.")
-            else:
-                print("Warning: classifier.bin not found!")
-
-            # -------------------------------------------------------
-            # 사용 모달리티 확인
-            # -------------------------------------------------------
-            use_text = (
-                getattr(args, 'use_discharge_note', False) or 
-                getattr(args, 'use_rad_report', False) or 
-                getattr(args, 'use_generated_rad_report', False)
-            )
-            use_image = getattr(args, 'use_cxr_image', False)
-
-            # 2. Language Model Adapter 로드 (Text 사용 시에만)
-            if use_text:
-                lm_path = checkpoint_path / "lm_adapter.bin"
-                if lm_path.exists():
-                    # LoRA 로드 유틸리티 함수 사용 가정 (map_adapter_keys, load_adapter)
-                    lm_adapter_state = map_adapter_keys(torch.load(lm_path, map_location="cpu", weights_only=False), "language_model_adapter")
-                    current_state_dict = model.base_model.language_model.state_dict()
-                    load_adapter(current_state_dict, lm_adapter_state)
-                    model.base_model.language_model.load_state_dict(current_state_dict, strict=False)
-                    print("Loaded language model LoRA adapter.")
-                else:
-                    print(f"Warning: Text used but {lm_path} not found.")
-
-            # 3. Vision Part 로드 (Image 사용 시에만)
-            if use_image:
-                # 3-1. Vision Adapter
-                vm_adapter_path = checkpoint_path / "vm_adapter.bin"
-                if vm_adapter_path.exists():
-                    vm_adapter_state = map_adapter_keys(torch.load(vm_adapter_path, map_location="cpu", weights_only=False), "vision_model_adapter")
-                    current_state_dict = model.base_model.vision_model.state_dict()
-                    load_adapter(current_state_dict, vm_adapter_state)
-                    model.base_model.vision_model.load_state_dict(current_state_dict, strict=False)
-                    print("Loaded vision model LoRA adapter.")
-                else:
-                    print(f"Vision adapter not found at {vm_adapter_path} (Might rely on pre-trained if not saved).")
-
-                # 3-2. Multimodal Projector
-                multi_modal_projector_path = checkpoint_path / "multi_modal_projector.bin"
-                if multi_modal_projector_path.exists():
-                    multi_modal_projector_state = torch.load(multi_modal_projector_path, map_location="cpu", weights_only=True)
-                    model.base_model.multi_modal_projector.load_state_dict(multi_modal_projector_state)
-                    print("Loaded multimodal projector.")
-                else:
-                    print(f"Multimodal projector not found at {multi_modal_projector_path}.")
+    # Wrapper Model 초기화
+    model = LlamaMortalityClassificationModel(args, base_model)
+    
+    if inference:
+        # 체크포인트 디렉토리 찾기
+        if not os.path.exists(args.checkpoint_dir):
+            raise FileNotFoundError(f"Checkpoint directory not found: {args.checkpoint_dir}")
             
-        return model, processor
+        # 디렉토리 내부의 하위 폴더(checkpoint-xxx)를 찾거나, 해당 폴더 자체를 사용
+        subdirs = [entry.path for entry in os.scandir(args.checkpoint_dir) if entry.is_dir()]
+        if subdirs:
+            checkpoint_path = Path(subdirs[0]) # 첫 번째 하위 폴더 선택 (보통 최신 or best)
+        else:
+            checkpoint_path = Path(args.checkpoint_dir) # 하위 폴더 없으면 해당 경로 사용
+
+        print(f"\nLoading weights from {checkpoint_path}...")
+
+        # 1. Classifier 로드 (항상 존재해야 함)
+        classifier_path = checkpoint_path / "classifier.bin"
+        if classifier_path.exists():
+            classifier_state = torch.load(classifier_path, map_location="cpu", weights_only=True)
+            model.classifier.load_state_dict(classifier_state, strict=False)
+            print("Loaded classifier.")
+        else:
+            print("Warning: classifier.bin not found!")
+
+        # -------------------------------------------------------
+        # 사용 모달리티 확인
+        # -------------------------------------------------------
+        use_text = (
+            getattr(args, 'use_discharge_note', False) or 
+            getattr(args, 'use_rad_report', False) or 
+            getattr(args, 'use_generated_rad_report', False)
+        )
+        use_image = getattr(args, 'use_cxr_image', False)
+
+        # 2. Language Model Adapter 로드 (Text 사용 시에만)
+        if use_text:
+            lm_path = checkpoint_path / "lm_adapter.bin"
+            if lm_path.exists():
+                # LoRA 로드 유틸리티 함수 사용 가정 (map_adapter_keys, load_adapter)
+                lm_adapter_state = map_adapter_keys(torch.load(lm_path, map_location="cpu", weights_only=False), "language_model_adapter")
+                current_state_dict = model.base_model.language_model.state_dict()
+                load_adapter(current_state_dict, lm_adapter_state)
+                model.base_model.language_model.load_state_dict(current_state_dict, strict=False)
+                print("Loaded language model LoRA adapter.")
+            else:
+                print(f"Warning: Text used but {lm_path} not found.")
+
+        # 3. Vision Part 로드 (Image 사용 시에만)
+        if use_image:
+            # 3-1. Vision Adapter
+            vm_adapter_path = checkpoint_path / "vm_adapter.bin"
+            if vm_adapter_path.exists():
+                vm_adapter_state = map_adapter_keys(torch.load(vm_adapter_path, map_location="cpu", weights_only=False), "vision_model_adapter")
+                current_state_dict = model.base_model.vision_model.state_dict()
+                load_adapter(current_state_dict, vm_adapter_state)
+                model.base_model.vision_model.load_state_dict(current_state_dict, strict=False)
+                print("Loaded vision model LoRA adapter.")
+            else:
+                print(f"Vision adapter not found at {vm_adapter_path} (Might rely on pre-trained if not saved).")
+
+            # 3-2. Multimodal Projector
+            multi_modal_projector_path = checkpoint_path / "multi_modal_projector.bin"
+            if multi_modal_projector_path.exists():
+                multi_modal_projector_state = torch.load(multi_modal_projector_path, map_location="cpu", weights_only=True)
+                model.base_model.multi_modal_projector.load_state_dict(multi_modal_projector_state)
+                print("Loaded multimodal projector.")
+            else:
+                print(f"Multimodal projector not found at {multi_modal_projector_path}.")
+        
+    return model, processor

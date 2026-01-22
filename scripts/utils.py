@@ -5,11 +5,11 @@ import copy
 import os
 
 # 서드파티 라이브러리
-from typing import Optional
+from typing import Optional, Dict
 import torch
 import torch.nn.functional as F
 from sklearn.metrics import *
-from transformers import Trainer
+from transformers import Trainer, AutoProcessor
 from dataloader import *
 import numpy as np
 
@@ -366,6 +366,90 @@ def _bootstrap_ci_auc_pr(labels, pos_probs, n_boot=2000, seed=42, stratified=Tru
     auprc_ci = (float(np.percentile(pr_samples, lo)), float(np.percentile(pr_samples, hi)))
 
     return auroc_ci, auprc_ci, int(min(len(roc_samples), len(pr_samples)))
+
+def load_sample_by_unique_id(unique_id: str, args, processor: AutoProcessor) -> Dict:
+    hash2meta = load_hash2meta_dict(args.metadata_path, args.metadata_image_path)
+    if unique_id not in hash2meta:
+        raise ValueError(f"Unique ID {unique_id} not found in metadata")
+
+    discharge_note = None
+    label = None
+    try:
+        with open(args.test_data_path, "r", encoding="utf-8") as f:
+            for line in f:
+                item = json.loads(line)
+                if item.get("id") == unique_id:
+                    if args.summary_type in item:
+                        t = item[args.summary_type]
+                        discharge_note = t[0] if isinstance(t, list) else t
+                    elif "text" in item:
+                        t = item["text"]
+                        discharge_note = t[0] if isinstance(t, list) else t
+                    if "label" in item:
+                        label = item["label"]
+                    break
+    except Exception:
+        pass
+
+    decision_tree = CXRDecisionTree()
+    all_img_paths = hash2meta[unique_id]["metadata_filtered"]
+    selected = decision_tree.select_best_cxr(all_img_paths)
+    if selected is None:
+        raise ValueError(f"No CXR image found for unique_id {unique_id}")
+
+    selected_img_data_path = selected[1]
+    mp = args.metadata_image_path.lower()
+    if "train" in mp:
+        split = "train"
+    elif "dev" in mp or "val" in mp:
+        split = "dev"
+    else:
+        split = "test"
+
+    image_path = selected_img_data_path.split("/")[-1]
+    name, ext = image_path.split(".")
+    if "_512_resized" in name:
+        real_path = os.path.join(args.base_img_dir, split, image_path)
+    else:
+        real_path = os.path.join(args.base_img_dir, split, f"{name}_512_resized.{ext}")
+
+    if not os.path.exists(real_path):
+        raise FileNotFoundError(f"Image not found: {real_path}")
+
+    img = Image.open(real_path).convert("RGB")
+    
+    # Load radiology reports
+    rad_report = None
+    generated_rad_report = None
+    
+    if selected_img_data_path:
+        path_parts = selected_img_data_path.split("/")[:3]
+        if len(path_parts) == 3:
+            rr_relative_path = '/'.join(path_parts) + ".txt"
+            original_report_path = os.path.join(args.base_rr_dir, rr_relative_path)
+            
+            report_dir = '/'.join(path_parts[:-1])
+            report_filename = path_parts[-1] + ".txt"
+            generated_rr_relative_path = f"{report_dir}/generated_{report_filename}"
+            generated_report_path = os.path.join(args.base_rr_dir, generated_rr_relative_path)
+            
+            if os.path.exists(original_report_path):
+                with open(original_report_path, "r", encoding='utf-8') as f:
+                    rad_report = f.read().replace('\n', ' ').strip()
+            
+            if os.path.exists(generated_report_path):
+                with open(generated_report_path, "r", encoding='utf-8') as f:
+                    generated_rad_report = f.read().replace('\n', ' ').strip()
+    
+    return {
+        "id": unique_id,
+        "discharge_note": discharge_note,
+        "radiology_report": rad_report,
+        "generated_radiology_report": generated_rad_report,
+        "label": label,
+        "image": img,
+        "image_path": real_path,
+    }
 
 def log_result(args, labels, probs, output_path, set_type,
                compute_ci=True, ci_method="bootstrap",
