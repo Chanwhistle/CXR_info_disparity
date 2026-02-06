@@ -1665,8 +1665,8 @@ def main():
     panels = [
         ("Vision L0 Vector Norm", vision_l0_norm, False),
         ("Projector Vector Norm", proj_norm, False),
-        ("Cross-Attn (Last Tok)", cross_attn, False),
-        ("LLM Image Input × Grad", llm_inp_x_grad, False),
+        ("Cross-Attn", cross_attn, False),
+        ("Cross-Attn × Grad", llm_inp_x_grad, False),
         ("Occlusion", occ_resized, True),
     ]
 
