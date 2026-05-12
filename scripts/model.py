@@ -68,8 +68,9 @@ class LlamaMortalityClassificationModel(nn.Module):
             self.dropout = nn.Dropout(p=lora_dropout)  
             self.loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([1.0, 3.0], device=device))
             
-            # LoRA 및 학습 모듈 설정 호출
-            self._setup_lora()
+            # LoRA 및 학습 모듈 설정 호출 (inference 시에는 불필요)
+            if not getattr(self.args, 'inference', False):
+                self._setup_lora()
     
     def _setup_lora(self) -> None:
         """Configure LoRA and trainable modules based on modality."""
@@ -192,7 +193,7 @@ class LlamaMortalityClassificationModel(nn.Module):
 
             # Classifier forward
             # dtype issue 방지: pooled output을 classifier weight 타입으로 캐스팅
-            logits = self.classifier(self.dropout(pooled.to(self.classifier.weight.dtype)))
+            logits = self.classifier(self.dropout(pooled.to(self.classifier.weight)))
             output_dict = {"logits": logits}
 
             if labels is not None:
@@ -240,12 +241,38 @@ def load_model(
     if attn_implementation is not None:
         extra_kwargs["attn_implementation"] = attn_implementation
 
+    use_4bit = getattr(args, 'load_in_4bit', False)
+    if use_4bit:
+        from transformers import BitsAndBytesConfig
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+        )
+        extra_kwargs["quantization_config"] = bnb_config
+
     base_model = MllamaForConditionalGeneration.from_pretrained(
         model_id,
         torch_dtype=torch.bfloat16,
-        device_map="auto",   # ✅ comma
+        device_map="auto",
         **extra_kwargs,
     )
+
+    # 4-bit 로드 시 multi_modal_projector는 quantized되어 checkpoint와 shape 불일치 발생.
+    # projector는 작은 레이어이므로 float16으로 교체 후 checkpoint weights를 로드한다.
+    if use_4bit:
+        import bitsandbytes as bnb
+        proj = base_model.multi_modal_projector
+        if isinstance(proj, bnb.nn.Linear4bit):
+            proj_device = proj.weight.device
+            new_proj = nn.Linear(
+                proj.in_features, proj.out_features,
+                bias=proj.bias is not None,
+                dtype=torch.bfloat16,
+                device=proj_device,
+            )
+            base_model.multi_modal_projector = new_proj
 
     # Wrapper Model 초기화
     model = LlamaMortalityClassificationModel(args, base_model)
@@ -267,8 +294,12 @@ def load_model(
         # 1. Classifier 로드 (항상 존재해야 함)
         classifier_path = checkpoint_path / "classifier.bin"
         if classifier_path.exists():
-            classifier_state = torch.load(classifier_path, map_location="cpu", weights_only=True)
-            model.classifier.load_state_dict(classifier_state, strict=False)
+            base_device = next(model.base_model.parameters()).device
+            classifier_state = torch.load(classifier_path, map_location=base_device, weights_only=True)
+            model.classifier.load_state_dict(classifier_state, strict=False, assign=True)
+            model.classifier.to(base_device)
+            if hasattr(model, 'loss_fn'):
+                model.loss_fn.weight = model.loss_fn.weight.to(base_device)
             print("Loaded classifier.")
         else:
             print("Warning: classifier.bin not found!")
@@ -287,11 +318,11 @@ def load_model(
         if use_text:
             lm_path = checkpoint_path / "lm_adapter.bin"
             if lm_path.exists():
-                # LoRA 로드 유틸리티 함수 사용 가정 (map_adapter_keys, load_adapter)
-                lm_adapter_state = map_adapter_keys(torch.load(lm_path, map_location="cpu", weights_only=False), "language_model_adapter")
+                lm_device = next(model.base_model.language_model.parameters()).device
+                lm_adapter_state = map_adapter_keys(torch.load(lm_path, map_location=lm_device, weights_only=False), "language_model_adapter")
                 current_state_dict = model.base_model.language_model.state_dict()
                 load_adapter(current_state_dict, lm_adapter_state)
-                model.base_model.language_model.load_state_dict(current_state_dict, strict=False)
+                model.base_model.language_model.load_state_dict(current_state_dict, strict=False, assign=True)
                 print("Loaded language model LoRA adapter.")
             else:
                 print(f"Warning: Text used but {lm_path} not found.")
@@ -301,10 +332,11 @@ def load_model(
             # 3-1. Vision Adapter
             vm_adapter_path = checkpoint_path / "vm_adapter.bin"
             if vm_adapter_path.exists():
-                vm_adapter_state = map_adapter_keys(torch.load(vm_adapter_path, map_location="cpu", weights_only=False), "vision_model_adapter")
+                vm_device = next(model.base_model.vision_model.parameters()).device
+                vm_adapter_state = map_adapter_keys(torch.load(vm_adapter_path, map_location=vm_device, weights_only=False), "vision_model_adapter")
                 current_state_dict = model.base_model.vision_model.state_dict()
                 load_adapter(current_state_dict, vm_adapter_state)
-                model.base_model.vision_model.load_state_dict(current_state_dict, strict=False)
+                model.base_model.vision_model.load_state_dict(current_state_dict, strict=False, assign=True)
                 print("Loaded vision model LoRA adapter.")
             else:
                 print(f"Vision adapter not found at {vm_adapter_path} (Might rely on pre-trained if not saved).")
@@ -312,8 +344,9 @@ def load_model(
             # 3-2. Multimodal Projector
             multi_modal_projector_path = checkpoint_path / "multi_modal_projector.bin"
             if multi_modal_projector_path.exists():
-                multi_modal_projector_state = torch.load(multi_modal_projector_path, map_location="cpu", weights_only=True)
-                model.base_model.multi_modal_projector.load_state_dict(multi_modal_projector_state)
+                proj_device = next(model.base_model.multi_modal_projector.parameters()).device
+                multi_modal_projector_state = torch.load(multi_modal_projector_path, map_location=proj_device, weights_only=True)
+                model.base_model.multi_modal_projector.load_state_dict(multi_modal_projector_state, assign=True)
                 print("Loaded multimodal projector.")
             else:
                 print(f"Multimodal projector not found at {multi_modal_projector_path}.")

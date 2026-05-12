@@ -18,16 +18,17 @@ from transformers import AutoProcessor
 from scipy import ndimage
 from tqdm import tqdm
 
+import cv2
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-SCRIPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
-if SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, SCRIPTS_DIR)
+EXPERIMENTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "experiments")
+if EXPERIMENTS_DIR not in sys.path:
+    sys.path.insert(0, EXPERIMENTS_DIR)
 
 from dataloader import load_hash2meta_dict, CXRDecisionTree
-from model import load_model
+from models.llama_model import load_model
 
 
 # ============================================================================
@@ -451,7 +452,16 @@ def capture_llm_self_attn_lasttok_to_image_gradcam(
         out_merge = out_h.transpose(1, 2).contiguous().view(B, 1, H * d)  # [B,1,E]
 
         # apply o_proj -> [B,1,E]
-        out_proj = o_proj(out_merge.to(dtype=o_proj.weight.dtype))
+        # 4-bit quantized weight는 autograd graph를 끊으므로 dequantize 후 F.linear 사용
+        w = o_proj.weight
+        bias = o_proj.bias
+        if hasattr(w, 'quant_state'):
+            import bitsandbytes.functional as bnb_f
+            w_fp = bnb_f.dequantize_4bit(w.data, w.quant_state, quant_type=w.quant_type)
+            w_fp = w_fp.to(torch.bfloat16).reshape(o_proj.out_features, o_proj.in_features)
+            out_proj = torch.nn.functional.linear(out_merge.to(w_fp.dtype), w_fp, bias)
+        else:
+            out_proj = o_proj(out_merge.to(dtype=w.dtype))
 
         # grad wrt scores
         # grad_outputs: [B,1,E]
@@ -546,7 +556,7 @@ def load_sample_by_unique_id(unique_id: str, args, processor: AutoProcessor) -> 
     hash2meta = load_hash2meta_dict(args.metadata_path, args.metadata_image_path)
     if unique_id not in hash2meta:
         raise ValueError(f"Unique ID {unique_id} not found in metadata")
-
+        
     discharge_note = None
     label = None
     try:
@@ -628,7 +638,7 @@ def load_sample_by_unique_id(unique_id: str, args, processor: AutoProcessor) -> 
 # ============================================================================
 # Batch build (NO forced truncation)
 # ============================================================================
-def build_batch(processor: AutoProcessor, sample: Dict, device: torch.device) -> Dict:
+def build_batch(processor: AutoProcessor, sample: Dict, device: torch.device, max_note_chars: int = None) -> Dict:
     system_prompt = (
         "A clinical document and a single, most recent chest X-ray (CXR) image from the patient are provided. "
         "Based on the clinical context and the provided CXR image, assess how likely the patient's "
@@ -636,8 +646,11 @@ def build_batch(processor: AutoProcessor, sample: Dict, device: torch.device) ->
     )
 
     if sample.get("discharge_note"):
+        note = sample["discharge_note"]
+        if max_note_chars is not None:
+            note = note[:max_note_chars]
         user_prompt = (
-            f"Here is the clinical document:\n{sample['discharge_note']}\n\n"
+            f"Here is the clinical document:\n{note}\n\n"
             "Based on the provided clinical information and single CXR image, how likely is the patient's "
             "out-of-hospital mortality within 30 days? "
             "Please do not explain the reason and respond with one word only: 0:alive, 1:death.\n\nAssistant:"
@@ -1183,6 +1196,15 @@ def flatten_proj_tokens(x: torch.Tensor) -> torch.Tensor:
 # ============================================================================
 # Heatmap overlay helpers
 # ============================================================================
+def enhance_cxr(img: np.ndarray, clip_limit: float = 2.0, contrast: float = 1.15) -> np.ndarray:
+    """CLAHE + contrast boost for grayscale CXR displayed as RGB."""
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8))
+    enhanced = clahe.apply(gray)
+    f = np.clip((enhanced.astype(np.float32) - 128) * contrast + 128, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(f, cv2.COLOR_GRAY2RGB)
+
+
 def normalize_signed_map(hm: np.ndarray, clip_abs_percentile: float = 99.0) -> Tuple[np.ndarray, float]:
     x = hm.astype(np.float32)
     if np.isfinite(x).any():
@@ -1370,7 +1392,7 @@ def save_5panel_figure(
     fig, axes = plt.subplots(1, 5, figsize=(30, 15))
     axes = axes.reshape(-1)
 
-    orig_np = np.array(original_img)
+    orig_np = enhance_cxr(np.array(original_img))
     for i in range(len(axes)):
         axes[i].axis("off")
 
@@ -1384,11 +1406,11 @@ def save_5panel_figure(
             overlay = overlay_heatmap(orig_np, heat_norm, alpha=cfg.alpha, cmap=cfg.cmap, interp=cfg.interp, signed=False)
 
         ax.imshow(overlay)
-        ax.set_title(title, fontsize=12, fontweight="bold")
+        ax.set_title(title, fontsize=25, fontweight="bold")
         ax.axis("off")
 
     plt.tight_layout()
-    plt.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.savefig(out_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -1415,14 +1437,19 @@ def main():
     parser.add_argument("--summary_type", default="plain")
     parser.add_argument("--target_class", type=int, default=1)
     parser.add_argument("--interp", choices=["bilinear", "bicubic"], default="bilinear")
-    parser.add_argument("--blur_radius", type=float, default=1.7)
-    parser.add_argument("--patch_sigma", type=float, default=2.0)
-    parser.add_argument("--normalize_gamma", type=float, default=1.2)
+    parser.add_argument("--blur_radius", type=float, default=5.0)
+    parser.add_argument("--patch_sigma", type=float, default=1.0)
+    parser.add_argument("--normalize_gamma", type=float, default=0.7)
+
+    parser.add_argument("--max_note_chars", type=int, default=None,
+                        help="Truncate discharge note to this many characters before tokenization (e.g. 2000). None = no limit.")
+    parser.add_argument("--load_in_4bit", action="store_true",
+                        help="Load model in 4-bit quantization (requires bitsandbytes). Reduces VRAM ~22GB -> ~6GB.")
 
     parser.add_argument("--do_occlusion", action="store_true")
     parser.add_argument("--occ_stride", default=4, type=int)
     parser.add_argument("--occ_blocks", default=None, type=int)
-    parser.add_argument("--occ_mask_value", default=0.0, type=float)
+    parser.add_argument("--occ_mask_value", default=0.1, type=float)
     parser.add_argument("--occ_micro_batch", default=8, type=int)
 
     parser.add_argument("--occ_feather", action="store_true")
@@ -1467,10 +1494,11 @@ def main():
         metadata_path=args.metadata_path,
         test_data_path=args.test_data_path,
         test_metadata_image_path=args.metadata_image_path,
+        load_in_4bit=args.load_in_4bit,
     )
 
     model, _ = load_model(model_args, model_id=args.model_id, inference=True, attn_implementation="sdpa")
-    model = model.to(device).eval()
+    model = model.eval()
 
     base_model = getattr(model, "base_model", model)
     vision_model = getattr(base_model, "vision_model", None)
@@ -1484,7 +1512,7 @@ def main():
     # -----------------------
     # Build batch (no trunc)
     # -----------------------
-    batch = build_batch(processor, sample, device)
+    batch = build_batch(processor, sample, device, max_note_chars=args.max_note_chars)
 
     # -----------------------
     # Run inference + save meta json
@@ -1581,29 +1609,29 @@ def main():
         l0_packed = scalar_to_tile_patchvals_packed(token_norm, grid_h, grid_w, ntiles, valid_tiles, patch_mask=patch_mask)
         vision_l0_norm = patchvals_to_heat_orig(l0_packed)
 
-    if cap_proj.tensor is None:
-        proj_norm = np.zeros((grid_h, grid_w), dtype=np.float32)
-    else:
-        t = cap_proj.tensor
-        token_norm = torch.linalg.norm(t.float(), dim=-1) if t.dim() >= 3 else torch.abs(t.float()).flatten()[None, :]
-        proj_packed = scalar_to_tile_patchvals_packed(token_norm, grid_h, grid_w, ntiles, valid_tiles, patch_mask=patch_mask)
-        proj_norm = patchvals_to_heat_orig(proj_packed)
+    # if cap_proj.tensor is None:
+    #     proj_norm = np.zeros((grid_h, grid_w), dtype=np.float32)
+    # else:
+    #     t = cap_proj.tensor
+    #     token_norm = torch.linalg.norm(t.float(), dim=-1) if t.dim() >= 3 else torch.abs(t.float()).flatten()[None, :]
+    #     proj_packed = scalar_to_tile_patchvals_packed(token_norm, grid_h, grid_w, ntiles, valid_tiles, patch_mask=patch_mask)
+    #     proj_norm = patchvals_to_heat_orig(proj_packed)
 
     hard_cuda_gc(device)
 
     # =========================================================================
     # 3) Self-Attn (Last tok -> Image tokens)  ✅ decoder-only는 self-attn
     # =========================================================================
-    cross_attn = np.zeros((grid_h, grid_w), dtype=np.float32)
+    # cross_attn = np.zeros((grid_h, grid_w), dtype=np.float32)
     
-    vec = capture_llm_self_attn_lasttok_to_image_probs(
-        base_model, batch, capture_last_n=args.cross_layers
-    )
-    if vec is not None and torch.is_tensor(vec):
-        cross_packed = scalar_to_tile_patchvals_packed(
-            vec[None, :], grid_h, grid_w, ntiles, valid_tiles, patch_mask=patch_mask
-        )
-        cross_attn = patchvals_to_heat_orig(cross_packed)
+    # vec = capture_llm_self_attn_lasttok_to_image_probs(
+    #     base_model, batch, capture_last_n=args.cross_layers
+    # )
+    # if vec is not None and torch.is_tensor(vec):
+    #     cross_packed = scalar_to_tile_patchvals_packed(
+    #         vec[None, :], grid_h, grid_w, ntiles, valid_tiles, patch_mask=patch_mask
+    #     )
+    #     cross_attn = patchvals_to_heat_orig(cross_packed)
                 
 
     hard_cuda_gc(device)
@@ -1612,24 +1640,24 @@ def main():
     # 4) Self-Attn × Grad (Last tok -> Image tokens) ✅ 확률 상승 기여도(근사)
     #    ReLU(attn_probs * dlogit/dscores)  (Chefer-style)
     # =========================================================================
-    llm_inp_x_grad = np.zeros((grid_h, grid_w), dtype=np.float32)
+    # llm_inp_x_grad = np.zeros((grid_h, grid_w), dtype=np.float32)
     
-    vec = capture_llm_self_attn_lasttok_to_image_gradcam(
-        model=model,
-        base_model=base_model,
-        batch=batch,
-        target_class=args.target_class,
-        capture_last_n=args.cross_layers,
-    )
+    # vec = capture_llm_self_attn_lasttok_to_image_gradcam(
+    #     model=model,
+    #     base_model=base_model,
+    #     batch=batch,
+    #     target_class=args.target_class,
+    #     capture_last_n=args.cross_layers,
+    # )
 
-    if vec is not None and torch.is_tensor(vec):
-        xg_packed = scalar_to_tile_patchvals_packed(
-            vec[None, :], grid_h, grid_w, ntiles, valid_tiles, patch_mask=patch_mask
-        )
-        llm_inp_x_grad = patchvals_to_heat_orig(xg_packed)
+    # if vec is not None and torch.is_tensor(vec):
+    #     xg_packed = scalar_to_tile_patchvals_packed(
+    #         vec[None, :], grid_h, grid_w, ntiles, valid_tiles, patch_mask=patch_mask
+    #     )
+    #     llm_inp_x_grad = patchvals_to_heat_orig(xg_packed)
 
-    model.zero_grad(set_to_none=True)
-    hard_cuda_gc(device)
+    # model.zero_grad(set_to_none=True)
+    # hard_cuda_gc(device)
 
 
     # =========================================================================
@@ -1663,11 +1691,11 @@ def main():
     # Save panels (5)
     # =========================================================================
     panels = [
-        ("Vision L0 Vector Norm", vision_l0_norm, False),
-        ("Projector Vector Norm", proj_norm, False),
-        ("Cross-Attn", cross_attn, False),
-        ("Cross-Attn × Grad", llm_inp_x_grad, False),
-        ("Occlusion", occ_resized, True),
+        ("Activation-based Map", vision_l0_norm, False),
+        # ("Projector Vector Norm", proj_norm, False),
+        # ("Cross-Attn", cross_attn, False),
+        # ("Cross-Attn × Grad", llm_inp_x_grad, False),
+        ("Occlusion-based Map", occ_resized, True),
     ]
 
     out_path = os.path.join(args.out_dir, f"{args.unique_id}_5panel.png")
