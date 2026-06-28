@@ -1,11 +1,8 @@
 """
-파인튜닝된 모델로 사망률 예측 추론 스크립트.
+Run mortality inference from a fine-tuned checkpoint.
 
-체크포인트를 로드하고 test set에 대해 예측을 수행합니다.
-결과는 JSONL 파일로 저장되고 AUROC/AUPRC/ECE/Brier score가 score.txt에 기록됩니다.
-
-실행 예시:
-    python inference.py \
+Example:
+    python -m eval.inference \
         --use_discharge_note \
         --checkpoint_dir ../trained_models/dn_only \
         --base_img_dir ../saved_images_560 \
@@ -15,18 +12,17 @@
 
 import json
 import os
-import random
 
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from models.llama_model import load_model
-from utils import get_args, log_result, prepare_loader, set_seed
+from core.models import load_model
+from core.utils import get_args, log_result, prepare_loader, set_seed
 
 
 def inference(model, device, data_loader, args, set_type):
-    """모델 추론 후 예측 결과를 JSONL로 저장."""
+    """Run inference and save predictions."""
     output_dict = {"data": []}
     predictions_file = os.path.join(
         args.output_path,
@@ -62,7 +58,6 @@ def test(args):
 
     torch.manual_seed(42)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
     model.eval()
     model.config.use_cache = True
 
@@ -72,5 +67,5 @@ def test(args):
 
 if __name__ == "__main__":
     args = get_args()
-    set_seed(random.randint(1, 10000))
+    set_seed(args.seed)
     test(args)

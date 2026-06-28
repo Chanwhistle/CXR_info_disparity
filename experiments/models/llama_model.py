@@ -78,7 +78,7 @@ class LlamaMortalityClassificationModel(nn.Module):
             lora_dropout = getattr(args, 'lora_dropout', 0.1)
             self.dropout = nn.Dropout(p=lora_dropout)
             # 클래스 불균형 보정: death(1) 가중치 3배
-            self.loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([1.0, 3.0], device=device))
+            self.loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([1.0, 5.0], device=device))
 
             if not getattr(self.args, 'inference', False):
                 self._setup_lora()

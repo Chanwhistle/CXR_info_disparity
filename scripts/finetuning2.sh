@@ -4,7 +4,7 @@ export CUDA_VISIBLE_DEVICES=2
 # 모델과 데이터 경로 설정
 MODEL_NAME="meta-llama/Llama-3.2-11B-Vision-Instruct"
 OUTPUT_BASE="../trained_models"
-CXR_DIR="../saved_images"
+CXR_DIR="../saved_images_560"
 RR_DIR="../physionet.org/files/mimic-cxr/2.1.0/files"
 
 for BATCH_SIZE in 8; do

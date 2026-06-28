@@ -66,7 +66,7 @@ class LlamaMortalityClassificationModel(nn.Module):
             self.classifier = nn.Linear(self.hidden_size, 2).to(device=device, dtype=base_dtype)     
             lora_dropout = getattr(self.custom_config, 'lora_dropout', 0.1)
             self.dropout = nn.Dropout(p=lora_dropout)  
-            self.loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([1.0, 3.0], device=device))
+            self.loss_fn = nn.CrossEntropyLoss(weight=torch.tensor([1.0, 5.0], device=device))
             
             # LoRA 및 학습 모듈 설정 호출 (inference 시에는 불필요)
             if not getattr(self.args, 'inference', False):

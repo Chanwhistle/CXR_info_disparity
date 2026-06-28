@@ -593,10 +593,10 @@ def load_sample_by_unique_id(unique_id: str, args, processor: AutoProcessor) -> 
 
     image_path = selected_img_data_path.split("/")[-1]
     name, ext = image_path.split(".")
-    if "_512_resized" in name:
+    if "_560_resized" in name:
         real_path = os.path.join(args.base_img_dir, split, image_path)
     else:
-        real_path = os.path.join(args.base_img_dir, split, f"{name}_512_resized.{ext}")
+        real_path = os.path.join(args.base_img_dir, split, f"{name}_560_resized.{ext}")
 
     if not os.path.exists(real_path):
         raise FileNotFoundError(f"Image not found: {real_path}")
@@ -1429,7 +1429,7 @@ def main():
     parser.add_argument("--metadata_path", default="../dataset/metadata.json")
     parser.add_argument("--metadata_image_path", default="../dataset/test_summarization/full-test-indent-images.json")
     parser.add_argument("--test_data_path", default="../dataset/test_summarization/total_output.jsonl")
-    parser.add_argument("--base_img_dir", default="../saved_images")
+    parser.add_argument("--base_img_dir", default="../saved_images_560")
     parser.add_argument("--base_rr_dir", default="../physionet.org/files/mimic-cxr/2.1.0/files")
 
     parser.add_argument("--alpha", type=float, default=0.3)

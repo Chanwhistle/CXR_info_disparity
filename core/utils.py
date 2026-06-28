@@ -1,18 +1,4 @@
-"""
-학습/평가 공통 유틸리티: Trainer, 메트릭, argparse, 시드 설정.
-
-AdapterOnlyTrainer: LoRA adapter + classifier만 선택적으로 저장하는 커스텀 HuggingFace Trainer.
-  - save_model(): 모달리티에 따라 필요한 가중치만 저장
-  - create_optimizer(): classifier에 별도 head_lr 적용 가능
-
-주요 함수:
-  - get_args()        : 학습/평가 공통 argparse 파싱
-  - load_data()       : JSONL 파일 로드
-  - prepare_loader()  : split(train/dev/test)에 맞는 DataLoader 생성
-  - log_result()      : AUROC/AUPRC/ECE/Brier score 계산 및 파일 저장
-  - compute_ece()     : Expected Calibration Error 계산
-  - set_seed()        : 전체 랜덤 시드 고정
-"""
+"""Shared training and evaluation utilities."""
 
 import argparse
 import json
@@ -26,21 +12,34 @@ import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score, average_precision_score, brier_score_loss
 from transformers import Trainer, AutoProcessor
 
-from dataloader import VLM_Dataset, custom_data_collator, CXRDecisionTree
+from core.dataloader import VLM_Dataset, custom_data_collator, CXRDecisionTree
 from torch.utils.data import DataLoader
 from PIL import Image
 
 
+def is_main_process():
+    """Return True for the only process that should emit shared logs/files."""
+    return int(os.environ.get("RANK", "0")) == 0
+
+
+def rank_zero_print(*args, **kwargs):
+    """Print once during distributed execution."""
+    if is_main_process():
+        print(*args, **kwargs)
+
+
 class AdapterOnlyTrainer(Trainer):
-    """LoRA adapter + classifier head만 선택적으로 저장하는 Trainer."""
+    """Save only adapters and the classifier."""
 
     def __init__(self, *args, **kwargs):
         self.use_cxr_image = kwargs.pop('use_cxr_image', False)
-        self.head_lr = kwargs.pop('head_lr', None)
         super().__init__(*args, **kwargs)
 
     def save_model(self, output_dir: Optional[str] = "None", _internal_call: bool = False):
-        """모달리티에 따라 필요한 모듈만 저장 (전체 모델 저장 불필요)."""
+        """Save trainable modules by modality."""
+        if not is_main_process():
+            return
+
         os.makedirs(output_dir, exist_ok=True)
         args = self.model.args
         use_text = (
@@ -49,74 +48,43 @@ class AdapterOnlyTrainer(Trainer):
             getattr(args, 'use_generated_rad_report', False)
         )
         use_image = getattr(args, 'use_cxr_image', False)
-        print(f"\nSaving model to {output_dir}...")
+        rank_zero_print(f"\nSaving model to {output_dir}...")
 
         if use_image:
-            # Vision LoRA adapter 저장
+            # Save the vision adapter.
+            from core.models.vlm_model import get_model_components
+            _, vision_model, projector, _ = get_model_components(
+                self.model.base_model, args.model_family
+            )
             try:
-                vm_state = self.model.base_model.vision_model.get_adapter_state_dict()
+                if vision_model is None:
+                    raise AttributeError("No vision model found")
+                vm_state = vision_model.get_adapter_state_dict()
                 torch.save(vm_state, os.path.join(output_dir, "vm_adapter.bin"))
-                print("Saved vision model LoRA adapter.")
+                rank_zero_print("Saved vision model LoRA adapter.")
             except Exception:
-                torch.save(self.model.base_model.vision_model.state_dict(), os.path.join(output_dir, "vision_encoder.bin"))
-                print("Warning: Saved full vision model (no adapter found).")
+                if vision_model is not None:
+                    torch.save(vision_model.state_dict(), os.path.join(output_dir, "vision_encoder.bin"))
+                    rank_zero_print("Warning: Saved full vision model (no adapter found).")
 
-            torch.save(self.model.base_model.multi_modal_projector.state_dict(), os.path.join(output_dir, "multi_modal_projector.bin"))
-            print("Saved multimodal projector.")
+            if projector is not None:
+                torch.save(projector.state_dict(), os.path.join(output_dir, "multi_modal_projector.bin"))
+                rank_zero_print("Saved multimodal projector.")
 
         if use_text:
-            # LM LoRA adapter 저장 (텍스트 전용 또는 멀티모달)
-            from models.llama_model import _get_lm
-            lm = _get_lm(self.model.base_model)
+            # Save the language adapter.
+            from core.models.vlm_model import get_model_components
+            lm, _, _, _ = get_model_components(self.model.base_model, args.model_family)
             try:
                 lm_state = lm.get_adapter_state_dict()
                 torch.save(lm_state, os.path.join(output_dir, "lm_adapter.bin"))
-                print("Saved language model LoRA adapter.")
+                rank_zero_print("Saved language model LoRA adapter.")
             except Exception as e:
-                print(f"Skipping LM adapter save: {e}")
+                rank_zero_print(f"Skipping LM adapter save: {e}")
 
-        # Classifier는 항상 저장
+        # Always save the classifier.
         torch.save(self.model.classifier.state_dict(), os.path.join(output_dir, "classifier.bin"))
-        print("Saved classification head.")
-
-    def create_optimizer(self):
-        """head_lr 지정 시 classifier와 LoRA/projector에 다른 lr 적용."""
-        if self.head_lr is None:
-            return super().create_optimizer()
-
-        lora_projector_params = []
-        classifier_params = []
-
-        print("\n=== Trainable Parameters ===")
-        for name, param in self.model.named_parameters():
-            if not param.requires_grad:
-                continue
-            if 'classifier' in name.lower():
-                classifier_params.append(param)
-            else:
-                lora_projector_params.append(param)
-
-        num_lora = sum(p.numel() for p in lora_projector_params)
-        num_cls = sum(p.numel() for p in classifier_params)
-        print(f"LoRA/Projector: {len(lora_projector_params)} tensors, {num_lora:,} elements")
-        print(f"Classifier:     {len(classifier_params)} tensors, {num_cls:,} elements")
-
-        optimizer_grouped_parameters = [
-            {"params": lora_projector_params, "lr": self.args.learning_rate},
-            {"params": classifier_params, "lr": self.head_lr},
-        ]
-
-        optimizer_cls, optimizer_kwargs = self.get_optimizer_cls_and_kwargs(self.args)
-        if "lr" not in optimizer_kwargs:
-            optimizer_kwargs["lr"] = self.args.learning_rate
-
-        optimizer = optimizer_cls(optimizer_grouped_parameters, **optimizer_kwargs)
-
-        if not hasattr(optimizer, 'defaults') or optimizer.defaults is None:
-            optimizer.defaults = optimizer_kwargs
-
-        self.optimizer = optimizer
-        return optimizer
+        rank_zero_print("Saved classification head.")
 
     def create_scheduler(self, num_training_steps: int, optimizer=None):
         opt = optimizer if optimizer is not None else self.optimizer
@@ -129,7 +97,7 @@ class AdapterOnlyTrainer(Trainer):
 
 
 def extract_first_binary(s: str) -> int:
-    """문자열에서 첫 번째 0 또는 1 추출 (zeroshot 예측 파싱용)."""
+    """Return the first binary digit."""
     for char in str(s):
         if char in ['0', '1']:
             return int(char)
@@ -137,7 +105,7 @@ def extract_first_binary(s: str) -> int:
 
 
 def prepare_loader(summary_type, args, set, processor):
-    """split 이름에 따라 DataLoader 생성."""
+    """Build a loader for a data split."""
     if set == "train":
         data_path, image_path = args.train_data_path, args.train_metadata_image_path
     elif set == "dev":
@@ -167,7 +135,7 @@ def prepare_loader(summary_type, args, set, processor):
 
 
 def load_data(path, summary_type):
-    """JSONL 파일을 로드하고 summary_type 필드를 text로 사용."""
+    """Load JSONL and select the summary text."""
     dataset = []
     with open(path, "r") as f:
         for line in f:
@@ -182,7 +150,7 @@ def load_data(path, summary_type):
 
 
 def compute_metrics_auroc(eval_pred):
-    """HuggingFace Trainer compute_metrics 콜백: AUROC + AUPRC 반환."""
+    """Compute AUROC and AUPRC."""
     logits, labels = eval_pred
     if isinstance(logits, (tuple, list)):
         logits = logits[0]
@@ -210,7 +178,7 @@ def load_adapter(current_state_dict, adapter_state):
 
 
 def map_adapter_keys(adapter_state, adapter_name="language_model_adapter"):
-    """저장된 LoRA 가중치 키를 현재 모델 state_dict 키로 매핑."""
+    """Map saved LoRA keys to the model."""
     mapped_state = {}
     for key, value in adapter_state.items():
         parts = key.split('.')
@@ -222,7 +190,7 @@ def map_adapter_keys(adapter_state, adapter_name="language_model_adapter"):
 
 
 def compute_ece(labels, pos_probs, n_bins=10):
-    """Expected Calibration Error 계산 (10-bin)."""
+    """Compute expected calibration error."""
     labels = np.asarray(labels).astype(int)
     pos_probs = np.asarray(pos_probs).astype(float)
 
@@ -238,7 +206,7 @@ def compute_ece(labels, pos_probs, n_bins=10):
 
 
 def _bootstrap_ci_auc_pr(labels, pos_probs, n_boot=2000, seed=42, stratified=True, alpha=0.05):
-    """Bootstrap 방식으로 AUROC/AUPRC의 95% 신뢰 구간 추정."""
+    """Estimate metric confidence intervals."""
     labels = np.asarray(labels).astype(int)
     pos_probs = np.asarray(pos_probs).astype(float)
     rng = np.random.default_rng(seed)
@@ -278,11 +246,13 @@ def _bootstrap_ci_auc_pr(labels, pos_probs, n_boot=2000, seed=42, stratified=Tru
 
 
 def log_result(args, labels, probs, output_path, set_type, compute_ci=True, n_boot=2000, seed=42):
-    """AUROC/AUPRC/Brier/ECE 계산 후 score.txt에 append."""
+    """Compute and append evaluation metrics."""
     os.makedirs(output_path, exist_ok=True)
     labels = np.asarray(labels).astype(int)
     pos_probs = np.asarray([p[1] for p in probs], dtype=float)
     uniq = np.unique(labels)
+    num_actual_positives = int(labels.sum())
+    num_actual_negatives = int(len(labels) - num_actual_positives)
 
     if len(uniq) < 2:
         auroc = auprc = brier = ece = auroc_ci = auprc_ci = "NA"
@@ -304,7 +274,8 @@ def log_result(args, labels, probs, output_path, set_type, compute_ci=True, n_bo
     with open(score_file, "a") as f:
         f.write(f"{args.summary_type}{'_add_pi' if args.use_pi else ''} {set_type} evaluation completed\n")
         f.write(f"Num samples          : {len(labels)}\n")
-        f.write(f"Num positives        : {int(labels.sum()) if isinstance(labels.sum(), (int, float)) else 'NA'}\n")
+        f.write(f"Actual positives     : {num_actual_positives}\n")
+        f.write(f"Actual negatives     : {num_actual_negatives}\n")
         f.write(f"AUROC               : {auroc}\n")
         f.write(f"AUPRC               : {auprc}\n")
         f.write(f"Brier Score         : {brier}\n")
@@ -319,7 +290,7 @@ def log_result(args, labels, probs, output_path, set_type, compute_ci=True, n_bo
 
 
 def set_seed(seed):
-    """재현성을 위한 전체 랜덤 시드 고정."""
+    """Set random seeds."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -332,18 +303,22 @@ def set_seed(seed):
 
 
 def get_args():
-    """학습/추론 공통 argparse 설정. 경로는 모두 상대경로 기본값 제공."""
-    parser = argparse.ArgumentParser(description="Llama mortality prediction: finetune / inference / zeroshot")
+    """Parse shared runtime arguments."""
+    parser = argparse.ArgumentParser(description="VLM mortality prediction: finetune / inference / zeroshot")
 
-    # --- 모델 ---
+    # Model
     parser.add_argument("--model_name_or_path",
         default="meta-llama/Llama-3.2-11B-Vision-Instruct",
         help="HuggingFace Hub 모델 ID 또는 로컬 경로")
+    parser.add_argument("--model_family",
+        choices=["auto", "llama", "qwen"],
+        default="auto",
+        help="Model backend family. Use auto unless the model id is ambiguous.")
     parser.add_argument("--checkpoint_dir",
         type=str, default="../trained_models",
         help="학습된 체크포인트 디렉토리")
 
-    # --- 데이터 경로 (상대경로 기본값; 실행 위치에 맞게 수정 필요) ---
+    # Data paths
     parser.add_argument("--train_data_path",
         type=str, default="../dataset/train_summarization/total_output.jsonl")
     parser.add_argument("--dev_data_path",
@@ -359,32 +334,30 @@ def get_args():
     parser.add_argument("--test_metadata_image_path",
         type=str, default="../dataset/test_summarization/full-test-indent-images.json")
 
-    # --- 외부 데이터 루트 경로 (반드시 지정) ---
+    # External data roots
     parser.add_argument("--base_img_dir",
-        default="../saved_images_560",
+        default=os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "saved_images_560")),
         help="저장된 CXR 이미지 폴더 (기본: saved_images_560)")
     parser.add_argument("--base_rr_dir",
         required=True, help="MIMIC-CXR 방사선 보고서 폴더 (physionet.org/.../files)")
 
-    # --- 출력 ---
+    # Output
     parser.add_argument("--output_path",
         type=str, default="./trained_models", help="모델/결과 저장 경로")
     parser.add_argument("--data_dir",
         type=str, default="../dataset",
         help="dataset 루트 디렉토리 (summarize_dn.py에서 입력 JSONL 탐색 기준)")
 
-    # --- 학습 하이퍼파라미터 ---
+    # Training
     parser.add_argument("--summary_type",  type=str, default='plain')
     parser.add_argument("--set_name",      type=str, default='train')
     parser.add_argument("--num_epochs",    type=int, default=3)
     parser.add_argument("--lr",            type=float, default=5e-5)
-    parser.add_argument("--head_lr",       type=float, default=None,
-        help="classifier 전용 lr (None이면 --lr 사용)")
     parser.add_argument("--batch_size",    type=int, default=4)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=4)
     parser.add_argument("--seed",          type=int, default=42)
 
-    # --- 모달리티 플래그 ---
+    # Modalities
     parser.add_argument("--use_cxr_image",             action="store_true")
     parser.add_argument("--use_rad_report",             action="store_true")
     parser.add_argument("--use_generated_rad_report",   action="store_true")
@@ -392,7 +365,7 @@ def get_args():
     parser.add_argument("--use_pi",                     action="store_true",
         help="나이/인종 등 개인정보 포함 여부")
 
-    # --- 실행 모드 플래그 ---
+    # Runtime modes
     parser.add_argument("--debug",      action="store_true")
     parser.add_argument("--finetune",   action="store_true")
     parser.add_argument("--summarize",  action="store_true")

@@ -41,8 +41,8 @@ def resize_with_padding(img_path, output_path):
     final_img.save(output_path, "JPEG", quality=95)
 
 def main():
-    source_dir = Path("saved_images")
-    target_dir = Path("saved_images_2")
+    source_dir = Path("saved_images_512")
+    target_dir = Path("saved_images_560")
     
     if not source_dir.exists():
         print(f"Error: {source_dir} directory does not exist!")
@@ -51,8 +51,8 @@ def main():
     # Create target directory if it doesn't exist
     target_dir.mkdir(exist_ok=True)
     
-    # Find all jpg files
-    jpg_files = list(source_dir.rglob("*.jpg"))
+    # Only convert the canonical 512px files.
+    jpg_files = list(source_dir.rglob("*_512_resized.jpg"))
     
     if not jpg_files:
         print(f"No JPG files found in {source_dir}")
@@ -64,6 +64,9 @@ def main():
     for img_path in tqdm(jpg_files, desc="Resizing images"):
         # Calculate relative path from source directory
         relative_path = img_path.relative_to(source_dir)
+        relative_path = relative_path.with_name(
+            relative_path.name.replace("_512_resized.jpg", "_560_resized.jpg")
+        )
         
         # Create output path maintaining directory structure
         output_path = target_dir / relative_path

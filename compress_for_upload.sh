@@ -21,7 +21,8 @@ echo ""
 tar -czf "$OUTPUT_FILE" \
   --exclude='dataset' \
   --exclude='physionet.org' \
-  --exclude='saved_images' \
+  --exclude='saved_images_512' \
+  --exclude='saved_images_560' \
   --exclude='trained_models' \
   --exclude='cache_images' \
   --exclude='attention_outputs' \

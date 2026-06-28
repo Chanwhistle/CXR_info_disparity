@@ -6,6 +6,9 @@
 # This file is sourced by other scripts and should not be run directly.
 # =============================================================================
 
+# Absolute repository path, derived from this file's location.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 # HuggingFace token (required for private model access)
 export HF_TOKEN="${HF_TOKEN:-}"
 
@@ -20,35 +23,34 @@ MODEL_NAME="meta-llama/Llama-3.2-11B-Vision-Instruct"
 # ---------------------------------------------------------------------------
 
 # MIMIC-CXR-JPG root (must contain files/ dir and mimic-cxr-2.0.0-metadata.csv)
-MIMIC_CXR_JPG_DIR="../physionet.org/files/mimic-cxr-jpg/2.0.0"
+MIMIC_CXR_JPG_DIR="${MIMIC_CXR_JPG_DIR:-${REPO_ROOT}/physionet.org/files/mimic-cxr-jpg/2.1.0}"
 
 # MIMIC-CXR radiology report root (physionet.org/.../files directory)
-MIMIC_CXR_RR_DIR="../physionet.org/files/mimic-cxr/2.1.0/files"
+MIMIC_CXR_RR_DIR="${MIMIC_CXR_RR_DIR:-${REPO_ROOT}/physionet.org/files/mimic-cxr/2.1.0/files}"
 
 # LCD Benchmark JSON files (output of create_data.py)
-LCD_JSON_DIR="../out_hospital_mortality_30"
+LCD_JSON_DIR="${LCD_JSON_DIR:-${REPO_ROOT}/out_hospital_mortality_30}"
 
 # Directory for resized CXR images (must contain train/dev/test subdirs)
-CXR_IMG_DIR="../saved_images"
+CXR_IMG_DIR="${CXR_IMG_DIR:-${REPO_ROOT}/saved_images_560}"
 
 # Dataset root (summarization JSONLs, metadata JSONs, etc.)
-DATASET_DIR="../dataset"
+DATASET_DIR="${DATASET_DIR:-${REPO_ROOT}/dataset}"
+METADATA_PATH="${METADATA_PATH:-${DATASET_DIR}/metadata.json}"
 
 # Directory to save trained model checkpoints
-TRAINED_MODELS_DIR="../trained_models"
+TRAINED_MODELS_DIR="${TRAINED_MODELS_DIR:-${REPO_ROOT}/trained_models_2e-6}"
 
 # ---------------------------------------------------------------------------
 # Training hyperparameters
 # ---------------------------------------------------------------------------
-BATCH_SIZE=4
-GRAD_ACCUM=8
-NUM_EPOCHS=20
-LR=5e-5
-HEAD_LR=5e-4
-SEED=42
-SUMMARY_TYPE="plain"
+BATCH_SIZE="${BATCH_SIZE:-1}"
+GRAD_ACCUM="${GRAD_ACCUM:-4}"
+NUM_EPOCHS="${NUM_EPOCHS:-20}"
+LR="${LR:-2e-6}"
+SEED="${SEED:-42}"
+SUMMARY_TYPE="${SUMMARY_TYPE:-plain}"
 
-# Absolute paths to key directories (derived from this file's location)
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Absolute paths to key directories
 PREPROCESSING_DIR="${REPO_ROOT}/preprocessing"
 EXPERIMENTS_DIR="${REPO_ROOT}/experiments"

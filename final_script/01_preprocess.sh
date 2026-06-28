@@ -4,7 +4,7 @@
 #
 # Steps:
 #   1. Add CXR image metadata to LCD Benchmark JSONs (train/dev/test)
-#   2. Resize MIMIC-CXR JPG images to 512px
+#   2. Resize MIMIC-CXR JPG images to 560px
 #   3. (Optional) Build HDF5 dataset for MultiChannel model
 #
 # Make sure to set paths in config.sh before running.
@@ -34,7 +34,7 @@ for SPLIT in train dev test; do
 done
 
 echo ""
-echo "=== [2/3] Resizing MIMIC-CXR JPGs to 512px ==="
+echo "=== [2/3] Resizing MIMIC-CXR JPGs to 560px ==="
 # Note: runs over the entire dataset, may take several hours
 python resize_jpgs.py "${MIMIC_CXR_JPG_DIR}"
 

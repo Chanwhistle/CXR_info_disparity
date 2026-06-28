@@ -13,18 +13,26 @@ inference_result/
 dataset/
 # JSON files (but keep config files if needed)
 *.json
+*.jsonl
 *.png
 !package.json
 !tsconfig.json
 # Text files (but keep important config files)
 *.txt
+*.csv
 !requirements.txt
 !LICENSE
-saved_images_2/
+saved_images_512/
+saved_images_560/
 physionet.org/
-saved_images/
 attention_outputs/
-trained_models/
+trained_models*
+ViT/
+visualization/
+ablation/
+compare_top10%/
+diagnostics/
+final_outputs_for_table/
 
 # Docker
 # Keep Docker files in git

@@ -1,10 +1,8 @@
 """
-파인튜닝 없이 Llama 모델의 zero-shot 사망률 예측 스크립트.
+Run zero-shot mortality prediction.
 
-dev/test set에 대해 모델을 그대로 실행하고 첫 번째 0/1 토큰을 예측으로 사용합니다.
-
-실행 예시:
-    HF_TOKEN=hf_xxx python llm_zeroshot.py \
+Example:
+    HF_TOKEN=hf_xxx python -m eval.llm_zeroshot \
         --use_discharge_note \
         --zeroshot \
         --base_img_dir ../saved_images_560 \
@@ -20,10 +18,10 @@ import torch
 from tqdm import tqdm
 from sklearn.metrics import f1_score, classification_report
 
-from utils import get_args, extract_first_binary, prepare_loader
-from models.llama_model import load_model
+from core.utils import get_args, extract_first_binary, prepare_loader
+from core.models import load_model
 
-# HF_TOKEN 환경변수로 private 모델 접근 (없으면 public 모델만 사용 가능)
+# Use HF_TOKEN for private models.
 _hf_token = os.environ.get("HF_TOKEN", None)
 if _hf_token:
     from huggingface_hub import login
@@ -39,7 +37,7 @@ def get_prompt_end_index(token_ids, prompt_token_id):
 
 
 def run_inference_on_loader(model, processor, device, data_loader, args, set_type):
-    """지정 split에 대한 zero-shot 예측 수행 후 결과 파일 저장."""
+    """Run zero-shot inference for one split."""
     os.makedirs(args.output_path, exist_ok=True)
     output_dict = {"data": []}
     predictions_file = os.path.join(args.output_path, f'{set_type}_predictions_{args.summary_type}.txt')

@@ -3,7 +3,7 @@
 # CPU 전용 SVM 학습 스크립트
 export OMP_NUM_THREADS=8
 export MKL_NUM_THREADS=8
-CXR_DIR="../saved_images"
+CXR_DIR="../saved_images_560"
 RR_DIR="../physionet.org/files/mimic-cxr/2.1.0/files"
 
 # 출력 경로 설정

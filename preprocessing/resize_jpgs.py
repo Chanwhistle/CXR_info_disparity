@@ -1,8 +1,8 @@
 """
-MIMIC-CXR-JPG 이미지를 512px 기준으로 리사이즈하는 전처리 스크립트.
+MIMIC-CXR-JPG 이미지를 560px 기준으로 리사이즈하는 전처리 스크립트.
 
-원본 JPG 이미지를 MIN_RES(기본 512) 기준으로 aspect ratio를 유지하면서 리사이즈하고,
-<original_name>_512_resized.jpg 형태로 저장합니다.
+원본 JPG 이미지를 MIN_RES(기본 560) 기준으로 aspect ratio를 유지하면서 리사이즈하고,
+<original_name>_560_resized.jpg 형태로 저장합니다.
 
 Usage:
     python resize_jpgs.py <mimic-cxr-jpg-directory>
@@ -19,7 +19,7 @@ from os.path import join
 from tqdm import tqdm
 
 # 리사이즈 기준 최소 해상도 (짧은 변 기준)
-MIN_RES = 512
+MIN_RES = 560
 
 def main(args):
     if len(args) < 1:

@@ -7,7 +7,7 @@ import json
 import argparse
 from PIL import Image
 from tqdm import tqdm
-from dataloader import load_hash2meta_dict, CXRDecisionTree
+from core.dataloader import load_hash2meta_dict, CXRDecisionTree
 import shutil
 
 

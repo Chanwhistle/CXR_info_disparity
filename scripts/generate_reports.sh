@@ -6,7 +6,7 @@ export CUDA_VISIBLE_DEVICES=5
 
 # Model and data path configuration
 MODEL_NAME="StanfordAIMI/CheXagent-8b"
-BASE_IMG_DIR="../saved_images"
+BASE_IMG_DIR="../saved_images_560"
 BASE_RR_DIR="../physionet.org/files/mimic-cxr/2.1.0/files"
 METADATA_PATH="../dataset/metadata.json"
 

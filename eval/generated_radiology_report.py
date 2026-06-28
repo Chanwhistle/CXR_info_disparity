@@ -17,7 +17,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoProcessor, GenerationConfig
 
 # Import from local modules
-from dataloader import load_hash2meta_dict, CXRDecisionTree
+from core.dataloader import load_hash2meta_dict, CXRDecisionTree
 
 
 def get_args():

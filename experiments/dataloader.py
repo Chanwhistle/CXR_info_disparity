@@ -153,10 +153,10 @@ class VLM_Dataset(Dataset):
     def _load_images(self, mapped_image_path: str) -> list:
         image_path = mapped_image_path.split("/")[-1]
         name, extension = image_path.split(".")
-        if "_512_resized" in name:
+        if "_560_resized" in name:
             real_image_path = os.path.join(self.args.base_img_dir, self.split, image_path)
         else:
-            real_image_path = os.path.join(self.args.base_img_dir, self.split, f"{name}_512_resized.{extension}")
+            real_image_path = os.path.join(self.args.base_img_dir, self.split, f"{name}_560_resized.{extension}")
 
         assert os.path.exists(real_image_path), f"Image not found: {real_image_path}"
         img = Image.open(real_image_path).convert("RGB")

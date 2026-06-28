@@ -1,11 +1,8 @@
 """
-Llama 모델을 사용한 퇴원 노트 요약 스크립트.
+Summarize discharge notes with Llama or Qwen.
 
-입력 JSONL의 original_note 필드를 지정된 summary_type 형식(plain/risk_factor/timeline 등)으로
-요약하여 새 JSONL로 저장합니다.
-
-실행 예시:
-    HF_TOKEN=hf_xxx python summarize_dn.py \
+Example:
+    HF_TOKEN=hf_xxx python -m preprocessing.summarize_dn \
         --set_name train \
         --summary_type plain \
         --data_dir ../dataset \
@@ -14,7 +11,7 @@ Llama 모델을 사용한 퇴원 노트 요약 스크립트.
         --base_rr_dir ../physionet.org/files/mimic-cxr/2.1.0/files \
         --summarize
 
-Note: HF_TOKEN 환경변수로 private 모델 접근 가능.
+Use HF_TOKEN for private models.
 """
 
 import json
@@ -24,11 +21,11 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from utils import get_args, load_data
-from models.llama_model import load_model
-from dataloader import VLM_Dataset, custom_data_collator
+from core.utils import get_args, load_data
+from core.models import load_model
+from core.dataloader import VLM_Dataset, custom_data_collator
 
-# HF_TOKEN 환경변수로 private 모델 접근 (없으면 public 모델만 사용 가능)
+# Use HF_TOKEN for private models.
 _hf_token = os.environ.get("HF_TOKEN", None)
 if _hf_token:
     from huggingface_hub import login
@@ -43,7 +40,7 @@ def summarize(args):
     model.eval()
     model.config.temperature = 0.1
 
-    # 입력 JSONL 경로: --data_dir / {set_name}_summarization / {set_name}.jsonl
+    # Build the input JSONL path.
     input_path = os.path.join(args.data_dir, f"{args.set_name}_summarization", f"{args.set_name}.jsonl")
     data = load_data(input_path, "original_note")
 
@@ -90,7 +87,7 @@ def summarize(args):
 
 if __name__ == "__main__":
     args = get_args()
-    # data_dir 인자가 없으면 기본 상대경로 사용
+    # Use the default relative data path.
     if not hasattr(args, 'data_dir') or args.data_dir is None:
         args.data_dir = "../dataset"
     summarize(args)

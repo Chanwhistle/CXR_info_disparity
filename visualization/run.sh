@@ -61,7 +61,7 @@ for INDEX in "${UNIQUE_IDS[@]}"; do
     --metadata_path ../dataset/metadata.json \
     --metadata_image_path ../dataset/train_summarization/full-train-indent-images.json \
     --test_data_path ../dataset/train_summarization/total_output.jsonl \
-    --base_img_dir ../saved_images \
+    --base_img_dir ../saved_images_560 \
     --base_rr_dir ../physionet.org/files/mimic-cxr/2.1.0/files \
     --load_in_4bit \
     --do_occlusion \

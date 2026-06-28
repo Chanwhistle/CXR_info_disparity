@@ -408,10 +408,10 @@ def load_sample_by_unique_id(unique_id: str, args, processor: AutoProcessor) -> 
 
     image_path = selected_img_data_path.split("/")[-1]
     name, ext = image_path.split(".")
-    if "_512_resized" in name:
+    if "_560_resized" in name:
         real_path = os.path.join(args.base_img_dir, split, image_path)
     else:
-        real_path = os.path.join(args.base_img_dir, split, f"{name}_512_resized.{ext}")
+        real_path = os.path.join(args.base_img_dir, split, f"{name}_560_resized.{ext}")
 
     if not os.path.exists(real_path):
         raise FileNotFoundError(f"Image not found: {real_path}")
@@ -591,8 +591,8 @@ def get_args():
     )
     parser.add_argument(
         "--base_img_dir", 
-        required=True,
-        help="Path to a CXR img folder"
+        default="../saved_images_560",
+        help="Path to a CXR img folder (default: saved_images_560)"
     )
     parser.add_argument(
         "--base_rr_dir", 
@@ -705,4 +705,3 @@ def get_args():
     )
 
     return parser.parse_args()
-

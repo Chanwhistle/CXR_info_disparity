@@ -59,7 +59,6 @@ python finetuning.py \
     --gradient_accumulation_steps "${GRAD_ACCUM}" \
     --num_epochs "${NUM_EPOCHS}" \
     --lr "${LR}" \
-    --head_lr "${HEAD_LR}" \
     --seed "${SEED}" \
     --base_img_dir "${CXR_IMG_DIR}" \
     --base_rr_dir "${MIMIC_CXR_RR_DIR}" \
