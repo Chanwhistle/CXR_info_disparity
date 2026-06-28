@@ -10,8 +10,6 @@ Do not commit or upload MIMIC/LCD data, resized images, model checkpoints, or pr
 - `preprocessing/`: image linking, image resizing, dataset construction, and summarization helpers.
 - `experiments/`: Llama/Qwen summarization, fine-tuning, and inference scripts.
 - `train/`, `core/`, `eval/`: current shared training/evaluation code.
-- `ViT/`: CheXpert-pretrained DenseNet-121 CXR-only baseline.
-- `ablation/`: analysis notebooks and ablation utilities.
 - `docker/`: Dockerfile, compose file, and Docker build ignore rules.
 
 ## Docker
