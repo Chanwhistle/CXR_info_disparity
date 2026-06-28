@@ -36,7 +36,6 @@ final_outputs_for_table/
 
 # Docker
 # Keep Docker files in git
-# .dockerignore should be in git
 
 # Python
 *.pyc

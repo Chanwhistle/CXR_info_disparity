@@ -8,7 +8,7 @@
 #
 # Run before preprocessing:
 #   bash final_script/00_environment_setting.sh
-#   docker compose exec cxr-app bash
+#   docker compose -f docker/docker-compose.yml exec cxr-app bash
 #   bash final_script/01_preprocess.sh
 # =============================================================================
 
@@ -20,6 +20,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_IMAGE="${BUILD_IMAGE:-1}"
 START_CONTAINER="${START_CONTAINER:-1}"
 SERVICE_NAME="${SERVICE_NAME:-cxr-app}"
+COMPOSE_FILE="${COMPOSE_FILE:-${REPO_ROOT}/docker/docker-compose.yml}"
 
 log() {
     echo ""
@@ -98,7 +99,7 @@ build_image() {
 
     log "Building Docker image"
     cd "${REPO_ROOT}"
-    docker compose build "${SERVICE_NAME}"
+    docker compose -f "${COMPOSE_FILE}" build "${SERVICE_NAME}"
 }
 
 start_container() {
@@ -109,10 +110,10 @@ start_container() {
 
     log "Starting Docker container"
     cd "${REPO_ROOT}"
-    docker compose up -d "${SERVICE_NAME}"
+    docker compose -f "${COMPOSE_FILE}" up -d "${SERVICE_NAME}"
 
     log "Checking GPU inside container"
-    if ! docker compose exec -T "${SERVICE_NAME}" python -c \
+    if ! docker compose -f "${COMPOSE_FILE}" exec -T "${SERVICE_NAME}" python -c \
         'import torch, sys; print(f"CUDA available: {torch.cuda.is_available()}, GPUs: {torch.cuda.device_count()}"); sys.exit(0 if torch.cuda.is_available() else 1)'
     then
         fail "GPU is not visible inside ${SERVICE_NAME}. Check NVIDIA Container Toolkit and Docker GPU runtime."
@@ -122,7 +123,7 @@ start_container() {
 show_next_steps() {
     log "Environment ready"
     echo "Next commands:"
-    echo "  docker compose exec ${SERVICE_NAME} bash"
+    echo "  docker compose -f docker/docker-compose.yml exec ${SERVICE_NAME} bash"
     echo "  bash final_script/01_preprocess.sh"
 }
 

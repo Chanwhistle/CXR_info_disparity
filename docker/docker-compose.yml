@@ -3,17 +3,18 @@ version: '3.8'
 services:
   cxr-app:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: cxr-info-disparity
+    gpus: all
     volumes:
       # Mount project directory for development
-      - .:/app
+      - ..:/app
       # Mount data directories (adjust paths as needed)
-      # - ./dataset:/app/dataset:ro
-      # - ./physionet.org:/app/physionet.org:ro
-      # - ./trained_models:/app/trained_models
-      # - ./saved_images:/app/saved_images
+      # - ../dataset:/app/dataset:ro
+      # - ../physionet.org:/app/physionet.org:ro
+      # - ../trained_models:/app/trained_models
+      # - ../saved_images_560:/app/saved_images_560
     environment:
       - PYTHONPATH=/app
       - TASK_NAME=${TASK_NAME:-out_hospital_mortality_30}
@@ -27,11 +28,12 @@ services:
   # Optional: Jupyter service
   jupyter:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
     container_name: cxr-jupyter
+    gpus: all
     volumes:
-      - .:/app
+      - ..:/app
     environment:
       - PYTHONPATH=/app
     ports:
