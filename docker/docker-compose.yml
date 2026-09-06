@@ -1,0 +1,38 @@
+services:
+  cxr-app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: cxr-app
+    gpus: all
+    volumes:
+      - ..:/app
+      # Point DATA_ROOT at a host directory holding the PhysioNet downloads.
+      # Everything the pipeline writes also lands there.
+      - ${DATA_ROOT:-../data}:/data
+    environment:
+      - PYTHONPATH=/app
+      - DATA_ROOT=/data
+      - HF_TOKEN=${HF_TOKEN:-}
+      - HF_HOME=/data/.huggingface
+    ports:
+      - "8888:8888"
+    stdin_open: true
+    tty: true
+    command: /bin/bash
+
+  jupyter:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: cxr-jupyter
+    gpus: all
+    volumes:
+      - ..:/app
+      - ${DATA_ROOT:-../data}:/data
+    environment:
+      - PYTHONPATH=/app
+      - DATA_ROOT=/data
+    ports:
+      - "8888:8888"
+    command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root

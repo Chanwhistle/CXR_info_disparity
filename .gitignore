@@ -1,0 +1,53 @@
+# ---------------------------------------------------------------------------
+# Patient data and derived artifacts.
+#
+# Nothing under these paths may ever be committed. MIMIC-CXR, MIMIC-IV, and
+# MIMIC-IV-Note are credentialed PhysioNet datasets, and their data use
+# agreements prohibit redistribution.
+# ---------------------------------------------------------------------------
+data/
+data_sample/
+build/
+tools/
+physionet.org/
+dataset/
+saved_images_*/
+out_hospital_mortality_*/
+discharge.csv
+labels.json
+
+# Model checkpoints and run outputs
+trained_models*/
+tiny_models/
+*.bin
+*.pt
+*.pth
+*.safetensors
+wandb/
+logs/
+*.log
+
+# Prediction and score files
+score.txt
+*_predictions.txt
+
+# Python
+__pycache__/
+*.py[cod]
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
